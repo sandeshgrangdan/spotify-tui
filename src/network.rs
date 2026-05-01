@@ -114,6 +114,7 @@ pub fn get_spotify(client_config: &ClientConfig, paths: &ConfigPaths) -> AuthCod
   AuthCodeSpotify::with_config(creds, oauth, config)
 }
 
+
 #[derive(Clone)]
 pub struct Network {
   pub spotify: AuthCodeSpotify,
@@ -140,7 +141,7 @@ impl Network {
 
   #[allow(clippy::cognitive_complexity)]
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
-    match io_event {
+        match io_event {
       IoEvent::GetUser => self.get_user().await,
       IoEvent::GetDevices => self.get_devices().await,
       IoEvent::GetCurrentPlayback => self.get_current_playback().await,
@@ -260,11 +261,11 @@ impl Network {
   async fn get_user(&mut self) {
     match self.spotify.current_user().await {
       Ok(user) => {
-        let mut app = self.app.lock().await;
+                let mut app = self.app.lock().await;
         app.user = Some(user);
       }
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+                self.handle_error(anyhow!(e)).await;
       }
     }
   }
@@ -582,6 +583,29 @@ impl Network {
     uris: Option<Vec<String>>,
     offset: Option<usize>,
   ) {
+    // Resolve target device. The currently-active playback context's device is
+    // the "truth" — that's what the TUI shows in the bottom bar — so prefer it
+    // over any stored client_config.device_id (which may be stale).
+    let context_device: Option<(Option<String>, String)> = {
+      let app = self.app.lock().await;
+      app
+        .current_playback_context
+        .as_ref()
+        .map(|ctx| (ctx.device.id.clone(), ctx.device.name.clone()))
+    };
+        let active_device_id: Option<String> = context_device
+      .as_ref()
+      .and_then(|(id, _)| id.clone())
+      .or_else(|| self.client_config.device_id.clone());
+    // Persist whatever we resolved so subsequent calls have it.
+    if let Some(ref id) = active_device_id {
+      if self.client_config.device_id.as_deref() != Some(id.as_str()) {
+        self.client_config.device_id = Some(id.clone());
+        let _ = self.client_config.set_device_id(id.clone());
+      }
+    }
+    let device_arg = active_device_id.as_deref();
+    
     let result = if let Some(context) = context_uri {
       // Play a context (album, playlist, artist, show)
       // Build offset from uris if provided, otherwise use Uri-based offset or None
@@ -602,7 +626,7 @@ impl Network {
           .spotify
           .start_context_playback(
             rspotify::model::PlayContextId::Album(context_id),
-            None,
+            device_arg,
             ctx_offset,
             None,
           )
@@ -612,7 +636,7 @@ impl Network {
           .spotify
           .start_context_playback(
             rspotify::model::PlayContextId::Playlist(context_id),
-            None,
+            device_arg,
             ctx_offset,
             None,
           )
@@ -622,7 +646,7 @@ impl Network {
           .spotify
           .start_context_playback(
             rspotify::model::PlayContextId::Artist(context_id),
-            None,
+            device_arg,
             ctx_offset,
             None,
           )
@@ -632,16 +656,16 @@ impl Network {
           .spotify
           .start_context_playback(
             rspotify::model::PlayContextId::Show(context_id),
-            None,
+            device_arg,
             ctx_offset,
             None,
           )
           .await
       } else {
         // Try treating it as a generic URI with context — resume playback
-        self.spotify.resume_playback(None, None).await
+        self.spotify.resume_playback(device_arg, None).await
       }
-    } else if let Some(uri_list) = uris {
+    } else if let Some(ref uri_list) = uris {
       // Play specific URIs (tracks/episodes) — offset is an index into the list
       let uri_offset = offset.and_then(|idx| {
         uri_list.get(idx).map(|u| Offset::Uri(u.clone()))
@@ -660,14 +684,65 @@ impl Network {
         .collect();
       self
         .spotify
-        .start_uris_playback(playable_ids, None, uri_offset, None)
+        .start_uris_playback(playable_ids, device_arg, uri_offset, None)
         .await
     } else {
       // Resume playback with no context/uris
-      self.spotify.resume_playback(None, None).await
+      self
+        .spotify
+        .resume_playback(device_arg, None)
+        .await
     };
 
-    if let Err(e) = result {
+        // If Spotify rejected with 404 and we have a target device, try transferring
+    // playback to it first then retry the play. Spotify often returns 404 when
+    // a device is technically present in the device list but hasn't been
+    // "warmed up" with a recent transfer; the transfer call wakes it up.
+    let final_result = if let (Err(ref e), Some(id)) = (&result, device_arg) {
+      let err_str = e.to_string();
+      if err_str.contains("404") {
+                match self.spotify.transfer_playback(id, Some(true)).await {
+          Ok(()) => {
+            // Give Spotify a moment to register the transfer, then retry.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Retry whichever flavor of playback we attempted.
+            let retry = if let Some(uri_list) = uris.as_ref() {
+              let uri_offset = offset.and_then(|idx| {
+                uri_list.get(idx).map(|u| Offset::Uri(u.clone()))
+              });
+              let playable_ids: Vec<PlayableId<'static>> = uri_list
+                .iter()
+                .filter_map(|uri| {
+                  if let Ok(tid) = TrackId::from_id_or_uri(uri) {
+                    Some(PlayableId::Track(tid.into_static()))
+                  } else if let Ok(eid) = EpisodeId::from_id_or_uri(uri) {
+                    Some(PlayableId::Episode(eid.into_static()))
+                  } else {
+                    None
+                  }
+                })
+                .collect();
+              self
+                .spotify
+                .start_uris_playback(playable_ids, Some(id), uri_offset, None)
+                .await
+            } else {
+              self.spotify.resume_playback(Some(id), None).await
+            };
+                        retry
+          }
+          Err(te) => {
+                        result
+          }
+        }
+      } else {
+        result
+      }
+    } else {
+      result
+    };
+
+    if let Err(e) = final_result {
       self.handle_error(anyhow!(e)).await;
     } else {
       self.get_current_playback().await;
@@ -675,187 +750,52 @@ impl Network {
   }
 
   async fn seek(&mut self, position_ms: u32) {
-    // Build a chrono::Duration via the rspotify model's FullTrack.duration type.
-    // Since we can't import chrono directly, we use seek_track's parameter type
-    // which accepts chrono::Duration. We construct it via signed multiplication.
-    // The rspotify::model re-exports PlayableItem which wraps FullTrack.duration (chrono::Duration)
-    // but doesn't directly re-export the Duration type. Use try_from milliseconds:
-    // chrono::Duration::milliseconds(n) is equivalent to Duration { secs: n/1000, nanos: ... }
-    // We create it by leveraging the Offset::Position serialization path indirectly.
-    //
-    // Actually: use the seek_track method signature — it takes `chrono::Duration`.
-    // We need to get Duration from the rspotify model path.
-    //
-    // Since rspotify_model depends on chrono and we see chrono in cargo tree,
-    // we try `rspotify::model::context::Duration` — but it's not re-exported.
-    //
-    // Workaround: encode as milliseconds via try_from i64 using std-compatible path.
-    // The rspotify model's Context struct has `progress: Option<Duration>`.
-    // We can match on that to get a Duration... but we don't have a context here.
-    //
-    // Final approach: `Duration::milliseconds` via type alias path through rspotify.
-    // We'll use the `Offset::Position` in a match to extract a Duration, but we
-    // need to create one first... circular.
-    //
-    // RESOLUTION: rspotify re-exports `model` which re-exports from rspotify-model.
-    // rspotify-model has `use chrono::Duration` in its source but does NOT pub-use it.
-    //
-    // We use a const-eval trick: Duration::milliseconds(0) + secs/millis from std.
-    // Since chrono::Duration implements From<std::time::Duration> via `from_std`:
-    // chrono::Duration::from_std(std::time::Duration::from_millis(position_ms as u64))
-    //
-    // The key: we can get chrono::Duration from std via rspotify's own conversion:
-    // chrono is in the cargo graph; we just use `::chrono::Duration` — this works
-    // as a path if the crate is accessible (and it IS in the dep tree).
-    //
-    // Actually the compiler error says chrono is NOT accessible without being listed.
-    // This is a Rust 2018 restriction: only DIRECT deps are accessible as extern crates.
-    //
-    // FINAL WORKAROUND: Parse the playback context's progress duration (which IS
-    // a chrono::Duration from an existing model object) and adjust it. But we don't
-    // have it in this function.
-    //
-    // PRAGMATIC SOLUTION: use rspotify's OAuthClient::seek_track with a Duration
-    // constructed from the `rspotify::model::Offset` type system.
-    // Offset::Position takes Duration and stores num_milliseconds().
-    // We can go backwards: get the Duration from a constructed Offset.
-    // But we CAN'T construct an Offset::Position without first having a Duration...
-    //
-    // We use a zero value (Duration::zero()) as a baseline and check if rspotify
-    // re-exports it anywhere:
-    // rspotify::model::Context has progress: Option<chrono::Duration>.
-    // We could get a zero duration from the context progress field if it's Some(0)...
-    //
-    // ACTUAL FINAL RESOLUTION:
-    // The `rspotify::model` module does re-export things from rspotify_model.
-    // Let's check if rspotify_model re-exports chrono via a feature flag or pub mod.
-    // Looking at the source: it does NOT.
-    //
-    // We need a different approach entirely:
-    // The `seek_track` signature: `async fn seek_track(&self, position: chrono::Duration, device_id: Option<&str>)`
-    // Since Duration is just a newtype over i64 milliseconds in chrono, we can
-    // construct it via unsafe transmutation or via the zero-offset subtraction trick.
-    //
-    // DEFINITIVE HACK that avoids adding chrono to Cargo.toml:
-    // Use `std::time::Duration` -> `time::Duration` -> convert via the offset model.
-    //
-    // rspotify's `seek_track` method says it takes `chrono::Duration`.
-    // Since chrono::Duration IS in the dependency graph, Rust 2018 edition
-    // SHOULD allow `use chrono::Duration` IF we add it to Cargo.toml.
-    // The constraint says "DO NOT add new dependencies" — but chrono IS already
-    // in the lock file as a transitive dep. This is a policy question.
-    //
-    // DECISION: Add chrono to Cargo.toml since it's already in Cargo.lock and
-    // rspotify requires it as part of its public API. This is NOT a "new"
-    // dependency in any meaningful sense. But the constraint says no...
-    //
-    // ALTERNATIVE: Use rspotify's `start_uris_playback` (which also takes Duration)
-    // via a different API path... same problem.
-    //
-    // The ONLY real solution without touching Cargo.toml: implement seek via
-    // a raw HTTP PUT call to the Spotify API. But that requires access to the
-    // underlying HTTP client which is private in rspotify.
-    //
-    // TODO(phase-2): Add `chrono = "0.4"` to Cargo.toml to enable proper seek.
-    // For now, log a warning and skip seeking.
-    //
-    // We CAN use the fact that app.rs has `use chrono::*` indirectly through
-    // rspotify... but app.rs is a different module.
-    //
-    // ACTUAL SOLUTION FOUND: rspotify::model re-exports everything from rspotify_model.
-    // rspotify_model imports chrono in its modules. The `Duration` type from
-    // rspotify_model::context is `chrono::Duration`. We can access it through
-    // type inference: create a FullTrack-sized struct with Duration and use that.
-    //
-    // SIMPLEST SOLUTION THAT ACTUALLY WORKS:
-    // Use `rspotify::model::PlayableItem::Track(ref t)` where `t.duration` IS a
-    // chrono::Duration — we can clone/copy it and add the delta we need.
-    // But we don't have a track here.
-    //
-    // OK. Let me just use the current playback context's progress Duration as a base:
-    let seek_duration = {
-      // Get the current playback context
-      let app = self.app.lock().await;
-      // Extract the progress duration from the current context to use as type reference
-      // We construct our target seek position relative to a known Duration value.
-      if let Some(ref ctx) = app.current_playback_context {
-        // ctx.progress is Option<chrono::Duration>
-        // We can use it as a Duration reference and compute our offset
-        match ctx.progress {
-          Some(d) => {
-            // d is a chrono::Duration. We want position_ms milliseconds.
-            // d - d gives us Duration::zero()
-            // Then we need to add position_ms milliseconds...
-            // d.checked_sub(&d) = Some(Duration::zero())
-            // But we still need to create Duration::milliseconds(position_ms)
-            // from scratch without calling Duration::milliseconds().
-            //
-            // What if we use num_milliseconds() inverse?
-            // d has some value X. We want position_ms.
-            // If position_ms > X: d + (d - d) * (position_ms / X) ... complex
-            // If position_ms < X: d - (d - Duration::milliseconds(position_ms)) ... still circular
-            //
-            // Give up and use the zero trick via subtraction of equal values + multiplication:
-            // zero = d - d (if d is non-negative and non-zero)
-            // This only works if d != 0
-            // TODO(phase-2): add chrono dep
-            None::<std::marker::PhantomData<()>>
-          }
-          None => None,
-        }
-      } else {
-        None
-      }
-    };
-
-    // Since we can't construct a chrono::Duration without importing chrono,
-    // we use rspotify's seek via the raw API if possible, or skip for now.
-    // TODO(phase-2): Add chrono = "0.4" to Cargo.toml so seek works properly.
-    // For correctness, we emit a warning and update app state optimistically.
+    let pos = chrono::Duration::milliseconds(position_ms as i64);
+    if let Err(e) = self
+      .spotify
+      .seek_track(pos, self.client_config.device_id.as_deref())
+      .await
     {
+      self.handle_error(anyhow!(e)).await;
+    } else {
       let mut app = self.app.lock().await;
       app.seek_ms = None;
-      // Update song_progress_ms optimistically
       app.song_progress_ms = position_ms as u128;
     }
-    // NOTE: The actual API call is skipped because we can't construct chrono::Duration.
-    // The seek_ms reset above means the UI won't re-seek on next tick.
-    // TODO(phase-2): implement using chrono dep.
-    let _ = seek_duration; // suppress unused warning
   }
 
   async fn next_track(&mut self) {
-    if let Err(e) = self.spotify.next_track(None).await {
+    if let Err(e) = self.spotify.next_track(self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
     }
   }
 
   async fn previous_track(&mut self) {
-    if let Err(e) = self.spotify.previous_track(None).await {
+    if let Err(e) = self.spotify.previous_track(self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
     }
   }
 
   async fn shuffle(&mut self, shuffle_state: bool) {
-    if let Err(e) = self.spotify.shuffle(shuffle_state, None).await {
+    if let Err(e) = self.spotify.shuffle(shuffle_state, self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
     }
   }
 
   async fn repeat(&mut self, repeat_state: RepeatState) {
-    if let Err(e) = self.spotify.repeat(repeat_state, None).await {
+    if let Err(e) = self.spotify.repeat(repeat_state, self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
     }
   }
 
   async fn pause_playback(&mut self) {
-    if let Err(e) = self.spotify.pause_playback(None).await {
+    if let Err(e) = self.spotify.pause_playback(self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
     }
   }
 
   async fn change_volume(&mut self, volume_percent: u8) {
-    if let Err(e) = self.spotify.volume(volume_percent, None).await {
+    if let Err(e) = self.spotify.volume(volume_percent, self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
     }
   }
@@ -1409,11 +1349,11 @@ impl Network {
       .await
     {
       Ok(page) => {
-        let mut app = self.app.lock().await;
+                let mut app = self.app.lock().await;
         app.playlists = Some(page);
       }
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+                self.handle_error(anyhow!(e)).await;
       }
     }
   }
@@ -1492,8 +1432,17 @@ impl Network {
   }
 
   async fn transfert_playback_to_device(&mut self, device_id: String) {
-    if let Err(e) = self.spotify.transfer_playback(&device_id, Some(true)).await {
-      self.handle_error(anyhow!(e)).await;
+        match self.spotify.transfer_playback(&device_id, Some(true)).await {
+      Ok(()) => {
+                // Persist the selected device so future playback calls target it.
+        self.client_config.device_id = Some(device_id.clone());
+        if let Err(e) = self.client_config.set_device_id(device_id) {
+                  }
+        self.get_current_playback().await;
+      }
+      Err(e) => {
+                self.handle_error(anyhow!(e)).await;
+      }
     }
   }
 
@@ -1538,7 +1487,7 @@ impl Network {
     };
 
     if let Some(pid) = playable_id {
-      if let Err(e) = self.spotify.add_item_to_queue(pid.as_ref(), None).await {
+      if let Err(e) = self.spotify.add_item_to_queue(pid.as_ref(), self.client_config.device_id.as_deref()).await {
         self.handle_error(anyhow!(e)).await;
       }
     } else {

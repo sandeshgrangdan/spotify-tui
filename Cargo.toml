@@ -30,6 +30,7 @@ rand = "0.8"
 anyhow = "1.0"
 async-trait = "0.1"
 webbrowser = "1.0"
+chrono = "0.4"
 
 [dev-dependencies]
 wiremock = "0.6"
