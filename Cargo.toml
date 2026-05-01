@@ -29,6 +29,7 @@ tokio = { version = "1", features = ["full"] }
 rand = "0.8"
 anyhow = "1.0"
 async-trait = "0.1"
+webbrowser = "1.0"
 
 [dev-dependencies]
 wiremock = "0.6"

@@ -27,8 +27,8 @@ use crossterm::{
   },
   ExecutableCommand,
 };
-use network::{IoEvent, Network};
-// TODO(phase-2): port to AuthCodeSpotify — oauth2 module removed in rspotify 0.16
+use rspotify::prelude::{BaseClient, OAuthClient};
+use network::{IoEvent, Network, get_spotify};
 use std::{
   cmp::{max, min},
   io::{self, stdout},
@@ -61,11 +61,6 @@ const SCOPES: [&str; 14] = [
   "user-read-recently-played",
 ];
 
-/// get token automatically with local webserver
-/// TODO(phase-2): port to AuthCodeSpotify — rebuild OAuth flow against rspotify 0.16
-pub async fn get_token_auto() -> bool {
-  unimplemented!("phase 2: rebuild OAuth flow against rspotify 0.16 AuthCodeSpotify")
-}
 
 fn close_application() -> Result<()> {
   disable_raw_mode()?;
@@ -167,17 +162,89 @@ of the app. Beware that this comes at a CPU cost!",
   let mut client_config = ClientConfig::new();
   client_config.load_config()?;
 
-  let _config_paths = client_config.get_or_build_paths()?;
+  let config_paths = client_config.get_or_build_paths()?;
 
-  // TODO(phase-2): port to AuthCodeSpotify — rebuild OAuth flow against rspotify 0.16
-  // The block below is stubbed; it will be replaced once the OAuth plumbing is ported.
-  unimplemented!("phase 2: rebuild OAuth flow against rspotify 0.16 AuthCodeSpotify");
+  // --- OAuth bootstrap (rspotify 0.16) ---
+  //
+  // 1. Build the client from stored credentials.
+  let mut spotify = get_spotify(&client_config, &config_paths);
+
+  // 2. Try the token cache first.
+  let token_loaded = match spotify.read_token_cache(true).await {
+    Ok(Some(token)) => {
+      *spotify.get_token().lock().await.unwrap() = Some(token);
+      true
+    }
+    _ => false,
+  };
+
+  // 3. If the cache miss, run the full browser-based OAuth flow.
+  if !token_loaded {
+    let port = client_config.get_port();
+    let redirect_url = redirect_uri::redirect_uri_web_server(&spotify, port)
+      .map_err(|_| anyhow::anyhow!("OAuth redirect listener failed"))?;
+
+    let code = spotify
+      .parse_response_code(&redirect_url)
+      .ok_or_else(|| anyhow::anyhow!("Failed to parse OAuth response code from redirect URL"))?;
+
+    spotify.request_token(&code).await?;
+  } else {
+    // If the cached token is expired, try a refresh.
+    let is_expired = spotify
+      .get_token()
+      .lock()
+      .await
+      .unwrap()
+      .as_ref()
+      .map_or(true, |t| t.is_expired());
+
+    if is_expired {
+      spotify.refresh_token().await?;
+    }
+  }
+
+  // --- Application startup ---
+  let (io_tx, io_rx) = std::sync::mpsc::channel::<IoEvent>();
+
+  // Determine token expiry from the current token (used to schedule re-auth).
+  // rspotify Token stores `expires_in` as a chrono::Duration; convert to
+  // a std::time::SystemTime by adding the seconds to `now`.
+  let spotify_token_expiry = {
+    let token_arc = spotify.get_token();
+    let guard = token_arc.lock().await.unwrap();
+    guard
+      .as_ref()
+      .map(|t| {
+        let secs = t.expires_in.num_seconds().max(0) as u64;
+        SystemTime::now() + std::time::Duration::from_secs(secs)
+      })
+      .unwrap_or(SystemTime::now())
+  };
+
+  let app = Arc::new(Mutex::new(App::new(
+    io_tx,
+    user_config.clone(),
+    spotify_token_expiry,
+  )));
+
+  let cloned_app = Arc::clone(&app);
+
+  let mut network = Network::new(spotify, client_config, cloned_app);
+
+  // Start the network event loop in a blocking thread so the async runtime
+  // isn't blocked by the `mpsc::Receiver::recv` call.
+  let _ = std::thread::spawn(move || {
+    start_tokio(io_rx, &mut network);
+  });
+
+  start_ui(user_config, &app).await?;
 
   Ok(())
 }
 
 #[tokio::main]
-async fn start_tokio<'a>(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
+async fn start_tokio(io_rx: std::sync::mpsc::Receiver<IoEvent>, network: &mut Network) {
   while let Ok(io_event) = io_rx.recv() {
     network.handle_network_event(io_event).await;
   }

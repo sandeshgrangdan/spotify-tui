@@ -8,8 +8,8 @@ use rand::{thread_rng, Rng};
 use rspotify::model::{context::CurrentPlaybackContext, PlayableItem, PlaylistId};
 use rspotify::prelude::{BaseClient, Id};
 
-pub struct CliApp<'a> {
-  pub net: Network<'a>,
+pub struct CliApp {
+  pub net: Network,
   pub config: UserConfig,
 }
 
@@ -17,8 +17,8 @@ pub struct CliApp<'a> {
 // I feel that async in a cli is not working
 // I just .await all processes and directly interact
 // by calling network.handle_network_event
-impl<'a> CliApp<'a> {
-  pub fn new(net: Network<'a>, config: UserConfig) -> Self {
+impl CliApp {
+  pub fn new(net: Network, config: UserConfig) -> Self {
     Self { net, config }
   }
 

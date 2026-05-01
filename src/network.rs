@@ -3,15 +3,20 @@ use crate::app::{
   ScrollableResultPages, SelectedAlbum, SelectedFullAlbum, SelectedFullShow, SelectedShow,
   TrackTableContext,
 };
-use crate::config::ClientConfig;
+use crate::config::{ClientConfig, ConfigPaths};
 use anyhow::anyhow;
-use rspotify::AuthCodeSpotify;
+use rspotify::{
+  scopes, AuthCodeSpotify, Config, Credentials, OAuth, Token,
+};
+use rspotify::prelude::OAuthClient;
 use rspotify::model::{
   Country, FullArtist, FullTrack, Page, PlaylistItem, Recommendations, RepeatState,
   SimplifiedAlbum, SimplifiedShow,
 };
 use serde_json::{map::Map, Value};
 use std::{
+  collections::HashSet,
+  path::PathBuf,
   sync::Arc,
   time::{Duration, Instant, SystemTime},
 };
@@ -77,26 +82,67 @@ pub enum IoEvent {
   AddItemToQueue(String),
 }
 
-pub fn get_spotify() -> (AuthCodeSpotify, SystemTime) {
-  unimplemented!("phase 2: rebuild auth flow against rspotify 0.16 AuthCodeSpotify")
+/// Construct an `AuthCodeSpotify` client from the user's credentials and
+/// cache configuration.  The caller owns the returned client and is responsible
+/// for running the OAuth flow (see `src/main.rs`).
+pub fn get_spotify(client_config: &ClientConfig, paths: &ConfigPaths) -> AuthCodeSpotify {
+  let creds = Credentials::new(&client_config.client_id, &client_config.client_secret);
+
+  let scopes = scopes!(
+    "playlist-read-collaborative",
+    "playlist-read-private",
+    "playlist-modify-private",
+    "playlist-modify-public",
+    "user-follow-read",
+    "user-follow-modify",
+    "user-library-modify",
+    "user-library-read",
+    "user-modify-playback-state",
+    "user-read-currently-playing",
+    "user-read-playback-state",
+    "user-read-playback-position",
+    "user-read-private",
+    "user-read-recently-played"
+  );
+
+  let oauth = OAuth {
+    redirect_uri: client_config.get_redirect_uri(),
+    scopes,
+    ..Default::default()
+  };
+
+  let config = Config {
+    token_cached: true,
+    token_refreshing: true,
+    cache_path: paths.token_cache_path.clone(),
+    ..Default::default()
+  };
+
+  AuthCodeSpotify::with_config(creds, oauth, config)
 }
 
 #[derive(Clone)]
-pub struct Network<'a> {
+pub struct Network {
   pub spotify: AuthCodeSpotify,
   large_search_limit: u32,
   small_search_limit: u32,
   pub client_config: ClientConfig,
-  pub app: &'a Arc<Mutex<App>>,
+  pub app: Arc<Mutex<App>>,
 }
 
-impl<'a> Network<'a> {
+impl Network {
   pub fn new(
     spotify: AuthCodeSpotify,
     client_config: ClientConfig,
-    app: &'a Arc<Mutex<App>>,
+    app: Arc<Mutex<App>>,
   ) -> Self {
-    unimplemented!()
+    Network {
+      spotify,
+      large_search_limit: 20,
+      small_search_limit: 4,
+      client_config,
+      app,
+    }
   }
 
   #[allow(clippy::cognitive_complexity)]
@@ -105,11 +151,20 @@ impl<'a> Network<'a> {
   }
 
   async fn handle_error(&mut self, e: anyhow::Error) {
-    unimplemented!()
+    let mut app = self.app.lock().await;
+    app.handle_error(e);
   }
 
   async fn get_user(&mut self) {
-    unimplemented!()
+    match self.spotify.current_user().await {
+      Ok(user) => {
+        let mut app = self.app.lock().await;
+        app.user = Some(user);
+      }
+      Err(e) => {
+        self.handle_error(anyhow!(e)).await;
+      }
+    }
   }
 
   async fn get_devices(&mut self) {
