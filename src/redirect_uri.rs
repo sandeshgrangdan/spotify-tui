@@ -1,35 +1,12 @@
-use rspotify::{oauth2::SpotifyOAuth, util::request_token};
+// TODO(phase-2): port to AuthCodeSpotify — rspotify::oauth2 removed in 0.16
+// The redirect URI web server will be re-implemented once the OAuth flow is ported.
 use std::{
   io::prelude::*,
   net::{TcpListener, TcpStream},
 };
 
-pub fn redirect_uri_web_server(spotify_oauth: &mut SpotifyOAuth, port: u16) -> Result<String, ()> {
-  let listener = TcpListener::bind(format!("127.0.0.1:{}", port));
-
-  match listener {
-    Ok(listener) => {
-      request_token(spotify_oauth);
-
-      for stream in listener.incoming() {
-        match stream {
-          Ok(stream) => {
-            if let Some(url) = handle_connection(stream) {
-              return Ok(url);
-            }
-          }
-          Err(e) => {
-            println!("Error: {}", e);
-          }
-        };
-      }
-    }
-    Err(e) => {
-      println!("Error: {}", e);
-    }
-  }
-
-  Err(())
+pub fn redirect_uri_web_server(_port: u16) -> Result<String, ()> {
+  unimplemented!("phase 2: rebuild OAuth flow against rspotify 0.16 AuthCodeSpotify")
 }
 
 fn handle_connection(mut stream: TcpStream) -> Option<String> {

@@ -4,6 +4,7 @@ use crate::{
   event::Key,
   network::IoEvent,
 };
+use rspotify::prelude::Id;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -57,7 +58,7 @@ pub fn handler(key: Key, app: &mut App) {
       AlbumTableContext::Full => {
         if let Some(selected_album) = app.selected_album_full.clone() {
           app.dispatch(IoEvent::StartPlayback(
-            Some(selected_album.album.uri),
+            Some(selected_album.album.id.uri()),
             None,
             Some(app.saved_album_tracks_index),
           ));
@@ -66,7 +67,7 @@ pub fn handler(key: Key, app: &mut App) {
       AlbumTableContext::Simplified => {
         if let Some(selected_album_simplified) = &app.selected_album_simplified.clone() {
           app.dispatch(IoEvent::StartPlayback(
-            selected_album_simplified.album.uri.clone(),
+            selected_album_simplified.album.id.as_ref().map(|i| i.uri()),
             None,
             Some(selected_album_simplified.selected_index),
           ));
@@ -86,7 +87,8 @@ pub fn handler(key: Key, app: &mut App) {
             .items
             .get(app.saved_album_tracks_index)
           {
-            app.dispatch(IoEvent::AddItemToQueue(track.uri.clone()));
+            let uri = track.id.as_ref().map(|i| i.uri()).unwrap_or_default();
+            app.dispatch(IoEvent::AddItemToQueue(uri));
           }
         };
       }
@@ -97,7 +99,8 @@ pub fn handler(key: Key, app: &mut App) {
             .items
             .get(selected_album_simplified.selected_index)
           {
-            app.dispatch(IoEvent::AddItemToQueue(track.uri.clone()));
+            let uri = track.id.as_ref().map(|i| i.uri()).unwrap_or_default();
+            app.dispatch(IoEvent::AddItemToQueue(uri));
           }
         };
       }
@@ -233,14 +236,14 @@ fn handle_save_album_event(app: &mut App) {
   match app.album_table_context {
     AlbumTableContext::Full => {
       if let Some(selected_album) = app.selected_album_full.clone() {
-        let album_id = &selected_album.album.id;
-        app.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.to_string()));
+        let album_id = selected_album.album.id.id().to_string();
+        app.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id));
       };
     }
     AlbumTableContext::Simplified => {
       if let Some(selected_album_simplified) = app.selected_album_simplified.clone() {
-        if let Some(album_id) = selected_album_simplified.album.id {
-          app.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id));
+        if let Some(album_id) = selected_album_simplified.album.id.as_ref() {
+          app.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.id().to_string()));
         };
       };
     }

@@ -38,7 +38,7 @@ impl ClientConfig {
   }
 
   pub fn get_redirect_uri(&self) -> String {
-    format!("http://localhost:{}/callback", self.get_port())
+    format!("http://127.0.0.1:{}/callback", self.get_port())
   }
 
   pub fn get_port(&self) -> u16 {
@@ -77,12 +77,12 @@ impl ClientConfig {
   pub fn set_device_id(&mut self, device_id: String) -> Result<()> {
     let paths = self.get_or_build_paths()?;
     let config_string = fs::read_to_string(&paths.config_file_path)?;
-    let mut config_yml: ClientConfig = serde_yaml::from_str(&config_string)?;
+    let mut config_yml: ClientConfig = serde_yml::from_str(&config_string)?;
 
     self.device_id = Some(device_id.clone());
     config_yml.device_id = Some(device_id);
 
-    let new_config = serde_yaml::to_string(&config_yml)?;
+    let new_config = serde_yml::to_string(&config_yml)?;
     let mut config_file = fs::File::create(&paths.config_file_path)?;
     write!(config_file, "{}", new_config)?;
     Ok(())
@@ -92,7 +92,7 @@ impl ClientConfig {
     let paths = self.get_or_build_paths()?;
     if paths.config_file_path.exists() {
       let config_string = fs::read_to_string(&paths.config_file_path)?;
-      let config_yml: ClientConfig = serde_yaml::from_str(&config_string)?;
+      let config_yml: ClientConfig = serde_yml::from_str(&config_string)?;
 
       self.client_id = config_yml.client_id;
       self.client_secret = config_yml.client_secret;
@@ -115,7 +115,7 @@ impl ClientConfig {
         "Click `Create a Client ID` and create an app",
         "Now click `Edit Settings`",
         &format!(
-          "Add `http://localhost:{}/callback` to the Redirect URIs",
+          "Add `http://127.0.0.1:{}/callback` to the Redirect URIs",
           DEFAULT_PORT
         ),
         "You are now ready to authenticate with Spotify!",
@@ -142,7 +142,7 @@ impl ClientConfig {
         port: Some(port),
       };
 
-      let content_yml = serde_yaml::to_string(&config_yml)?;
+      let content_yml = serde_yml::to_string(&config_yml)?;
 
       let mut new_config = fs::File::create(&paths.config_file_path)?;
       write!(new_config, "{}", content_yml)?;

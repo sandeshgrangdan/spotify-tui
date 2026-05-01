@@ -11,11 +11,11 @@ mod user_config;
 
 use crate::app::RouteId;
 use crate::event::Key;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use app::{ActiveBlock, App};
 use backtrace::Backtrace;
 use banner::BANNER;
-use clap::{App as ClapApp, Arg, Shell};
+use clap::{Arg, Command};
 use config::ClientConfig;
 use crossterm::{
   cursor::MoveTo,
@@ -27,12 +27,8 @@ use crossterm::{
   },
   ExecutableCommand,
 };
-use network::{get_spotify, IoEvent, Network};
-use redirect_uri::redirect_uri_web_server;
-use rspotify::{
-  oauth2::{SpotifyOAuth, TokenInfo},
-  util::{process_token, request_token},
-};
+use network::{IoEvent, Network};
+// TODO(phase-2): port to AuthCodeSpotify — oauth2 module removed in rspotify 0.16
 use std::{
   cmp::{max, min},
   io::{self, stdout},
@@ -42,7 +38,7 @@ use std::{
   time::SystemTime,
 };
 use tokio::sync::Mutex;
-use tui::{
+use ratatui::{
   backend::{Backend, CrosstermBackend},
   Terminal,
 };
@@ -66,23 +62,9 @@ const SCOPES: [&str; 14] = [
 ];
 
 /// get token automatically with local webserver
-pub async fn get_token_auto(spotify_oauth: &mut SpotifyOAuth, port: u16) -> Option<TokenInfo> {
-  match spotify_oauth.get_cached_token().await {
-    Some(token_info) => Some(token_info),
-    None => match redirect_uri_web_server(spotify_oauth, port) {
-      Ok(mut url) => process_token(spotify_oauth, &mut url).await,
-      Err(()) => {
-        println!("Starting webserver failed. Continuing with manual authentication");
-        request_token(spotify_oauth);
-        println!("Enter the URL you were redirected to: ");
-        let mut input = String::new();
-        match io::stdin().read_line(&mut input) {
-          Ok(_) => process_token(spotify_oauth, &mut input).await,
-          Err(_) => None,
-        }
-      }
-    },
-  }
+/// TODO(phase-2): port to AuthCodeSpotify — rebuild OAuth flow against rspotify 0.16
+pub async fn get_token_auto() -> bool {
+  unimplemented!("phase 2: rebuild OAuth flow against rspotify 0.16 AuthCodeSpotify")
 }
 
 fn close_application() -> Result<()> {
@@ -126,18 +108,18 @@ async fn main() -> Result<()> {
     panic_hook(info);
   }));
 
-  let mut clap_app = ClapApp::new(env!("CARGO_PKG_NAME"))
+  let clap_app = Command::new(env!("CARGO_PKG_NAME"))
     .version(env!("CARGO_PKG_VERSION"))
     .author(env!("CARGO_PKG_AUTHORS"))
     .about(env!("CARGO_PKG_DESCRIPTION"))
-    .usage("Press `?` while running the app to see keybindings")
+    .override_usage("Press `?` while running the app to see keybindings")
     .before_help(BANNER)
     .after_help(
       "Your spotify Client ID and Client Secret are stored in $HOME/.config/spotify-tui/client.yml",
     )
     .arg(
-      Arg::with_name("tick-rate")
-        .short("t")
+      Arg::new("tick-rate")
+        .short('t')
         .long("tick-rate")
         .help("Set the tick rate (milliseconds): the lower the number the higher the FPS.")
         .long_help(
@@ -145,47 +127,26 @@ async fn main() -> Result<()> {
 higher the FPS. It can be nicer to have a lower value when you want to use the audio analysis view \
 of the app. Beware that this comes at a CPU cost!",
         )
-        .takes_value(true),
+        .num_args(1),
     )
     .arg(
-      Arg::with_name("config")
-        .short("c")
+      Arg::new("config")
+        .short('c')
         .long("config")
         .help("Specify configuration file path.")
-        .takes_value(true),
+        .num_args(1),
     )
-    .arg(
-      Arg::with_name("completions")
-        .long("completions")
-        .help("Generates completions for your preferred shell")
-        .takes_value(true)
-        .possible_values(&["bash", "zsh", "fish", "power-shell", "elvish"])
-        .value_name("SHELL"),
-    )
+    // TODO: re-add shell completions via clap_complete in a follow-up.
     // Control spotify from the command line
     .subcommand(cli::playback_subcommand())
     .subcommand(cli::play_subcommand())
     .subcommand(cli::list_subcommand())
     .subcommand(cli::search_subcommand());
 
-  let matches = clap_app.clone().get_matches();
-
-  // Shell completions don't need any spotify work
-  if let Some(s) = matches.value_of("completions") {
-    let shell = match s {
-      "fish" => Shell::Fish,
-      "bash" => Shell::Bash,
-      "zsh" => Shell::Zsh,
-      "power-shell" => Shell::PowerShell,
-      "elvish" => Shell::Elvish,
-      _ => return Err(anyhow!("no completions avaible for '{}'", s)),
-    };
-    clap_app.gen_completions_to("spt", shell, &mut io::stdout());
-    return Ok(());
-  }
+  let matches = clap_app.get_matches();
 
   let mut user_config = UserConfig::new();
-  if let Some(config_file_path) = matches.value_of("config") {
+  if let Some(config_file_path) = matches.get_one::<String>("config").map(|s| s.as_str()) {
     let config_file_path = PathBuf::from(config_file_path);
     let path = UserConfigPaths { config_file_path };
     user_config.path_to_config.replace(path);
@@ -193,7 +154,7 @@ of the app. Beware that this comes at a CPU cost!",
   user_config.load_config()?;
 
   if let Some(tick_rate) = matches
-    .value_of("tick-rate")
+    .get_one::<String>("tick-rate")
     .and_then(|tick_rate| tick_rate.parse().ok())
   {
     if tick_rate >= 1000 {
@@ -206,53 +167,11 @@ of the app. Beware that this comes at a CPU cost!",
   let mut client_config = ClientConfig::new();
   client_config.load_config()?;
 
-  let config_paths = client_config.get_or_build_paths()?;
+  let _config_paths = client_config.get_or_build_paths()?;
 
-  // Start authorization with spotify
-  let mut oauth = SpotifyOAuth::default()
-    .client_id(&client_config.client_id)
-    .client_secret(&client_config.client_secret)
-    .redirect_uri(&client_config.get_redirect_uri())
-    .cache_path(config_paths.token_cache_path)
-    .scope(&SCOPES.join(" "))
-    .build();
-
-  let config_port = client_config.get_port();
-  match get_token_auto(&mut oauth, config_port).await {
-    Some(token_info) => {
-      let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
-
-      let (spotify, token_expiry) = get_spotify(token_info);
-
-      // Initialise app state
-      let app = Arc::new(Mutex::new(App::new(
-        sync_io_tx,
-        user_config.clone(),
-        token_expiry,
-      )));
-
-      // Work with the cli (not really async)
-      if let Some(cmd) = matches.subcommand_name() {
-        // Save, because we checked if the subcommand is present at runtime
-        let m = matches.subcommand_matches(cmd).unwrap();
-        let network = Network::new(oauth, spotify, client_config, &app);
-        println!(
-          "{}",
-          cli::handle_matches(m, cmd.to_string(), network, user_config).await?
-        );
-      // Launch the UI (async)
-      } else {
-        let cloned_app = Arc::clone(&app);
-        std::thread::spawn(move || {
-          let mut network = Network::new(oauth, spotify, client_config, &app);
-          start_tokio(sync_io_rx, &mut network);
-        });
-        // The UI must run in the "main" thread
-        start_ui(user_config, &cloned_app).await?;
-      }
-    }
-    None => println!("\nSpotify auth failed"),
-  }
+  // TODO(phase-2): port to AuthCodeSpotify — rebuild OAuth flow against rspotify 0.16
+  // The block below is stubbed; it will be replaced once the OAuth plumbing is ported.
+  unimplemented!("phase 2: rebuild OAuth flow against rspotify 0.16 AuthCodeSpotify");
 
   Ok(())
 }
@@ -289,6 +208,7 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
     let mut app = app.lock().await;
     // Get the size of the screen on each loop to account for resize event
     if let Ok(size) = terminal.backend().size() {
+      let size = ratatui::layout::Rect::new(0, 0, size.width, size.height);
       // Reset the help menu is the terminal was resized
       if is_first_render || app.size != size {
         app.help_menu_max_lines = 0;
@@ -319,24 +239,24 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
     };
 
     let current_route = app.get_current_route();
-    terminal.draw(|mut f| match current_route.active_block {
+    terminal.draw(|f| match current_route.active_block {
       ActiveBlock::HelpMenu => {
-        ui::draw_help_menu(&mut f, &app);
+        ui::draw_help_menu(f, &app);
       }
       ActiveBlock::Error => {
-        ui::draw_error_screen(&mut f, &app);
+        ui::draw_error_screen(f, &app);
       }
       ActiveBlock::SelectDevice => {
-        ui::draw_device_list(&mut f, &app);
+        ui::draw_device_list(f, &app);
       }
       ActiveBlock::Analysis => {
-        ui::audio_analysis::draw(&mut f, &app);
+        ui::audio_analysis::draw(f, &app);
       }
       ActiveBlock::BasicView => {
-        ui::draw_basic_view(&mut f, &app);
+        ui::draw_basic_view(f, &app);
       }
       _ => {
-        ui::draw_main_layout(&mut f, &app);
+        ui::draw_main_layout(f, &app);
       }
     })?;
 

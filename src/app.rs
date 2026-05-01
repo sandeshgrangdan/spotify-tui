@@ -1,31 +1,28 @@
 use super::user_config::UserConfig;
 use crate::network::IoEvent;
 use anyhow::anyhow;
-use rspotify::{
-  model::{
-    album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
-    artist::FullArtist,
-    audio::AudioAnalysis,
-    context::CurrentlyPlaybackContext,
-    device::DevicePayload,
-    page::{CursorBasedPage, Page},
-    playing::PlayHistory,
-    playlist::{PlaylistTrack, SimplifiedPlaylist},
-    show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
-    track::{FullTrack, SavedTrack, SimplifiedTrack},
-    user::PrivateUser,
-    PlayingItem,
-  },
-  senum::Country,
+use rspotify::prelude::Id;
+use rspotify::model::{
+  album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
+  artist::FullArtist,
+  audio::AudioAnalysis,
+  context::CurrentPlaybackContext,
+  device::DevicePayload,
+  page::{CursorBasedPage, Page},
+  playing::PlayHistory,
+  playlist::{PlaylistItem, SimplifiedPlaylist},
+  show::{FullShow, Show, SimplifiedEpisode, SimplifiedShow},
+  track::{FullTrack, SavedTrack, SimplifiedTrack},
+  user::PrivateUser,
+  Country, PlayableItem,
 };
-use std::str::FromStr;
 use std::sync::mpsc::Sender;
 use std::{
   cmp::{max, min},
   collections::HashSet,
   time::{Instant, SystemTime},
 };
-use tui::layout::Rect;
+use ratatui::layout::Rect;
 
 use arboard::Clipboard;
 
@@ -267,7 +264,7 @@ pub struct App {
   pub album_table_context: AlbumTableContext,
   pub saved_album_tracks_index: usize,
   pub api_error: String,
-  pub current_playback_context: Option<CurrentlyPlaybackContext>,
+  pub current_playback_context: Option<CurrentPlaybackContext>,
   pub devices: Option<DevicePayload>,
   // Inputs:
   // input is the string for input;
@@ -286,8 +283,8 @@ pub struct App {
   pub library: Library,
   pub playlist_offset: u32,
   pub made_for_you_offset: u32,
-  pub playlist_tracks: Option<Page<PlaylistTrack>>,
-  pub made_for_you_tracks: Option<Page<PlaylistTrack>>,
+  pub playlist_tracks: Option<Page<PlaylistItem>>,
+  pub made_for_you_tracks: Option<Page<PlaylistItem>>,
   pub playlists: Option<Page<SimplifiedPlaylist>>,
   pub recently_played: SpotifyResultAndSelectedIndex<Option<CursorBasedPage<PlayHistory>>>,
   pub recommended_tracks: Vec<FullTrack>,
@@ -443,13 +440,14 @@ impl App {
   }
 
   fn apply_seek(&mut self, seek_ms: u32) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       let duration_ms = match item {
-        PlayingItem::Track(track) => track.duration_ms,
-        PlayingItem::Episode(episode) => episode.duration_ms,
+        PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
+        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
+        PlayableItem::Unknown(_) => return,
       };
 
       let event = if seek_ms < duration_ms {
@@ -483,45 +481,50 @@ impl App {
 
   pub fn update_on_tick(&mut self) {
     self.poll_current_playback();
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item),
-      progress_ms: Some(progress_ms),
+      progress,
       is_playing,
       ..
     }) = &self.current_playback_context
     {
-      // Update progress even when the song is not playing,
-      // because seeking is possible while paused
-      let elapsed = if *is_playing {
-        self
-          .instant_since_last_current_playback_poll
-          .elapsed()
-          .as_millis()
-      } else {
-        0u128
-      } + u128::from(*progress_ms);
+      if let Some(progress_duration) = progress {
+        let progress_ms = progress_duration.num_milliseconds() as u32;
+        // Update progress even when the song is not playing,
+        // because seeking is possible while paused
+        let elapsed = if *is_playing {
+          self
+            .instant_since_last_current_playback_poll
+            .elapsed()
+            .as_millis()
+        } else {
+          0u128
+        } + u128::from(progress_ms);
 
-      let duration_ms = match item {
-        PlayingItem::Track(track) => track.duration_ms,
-        PlayingItem::Episode(episode) => episode.duration_ms,
-      };
+        let duration_ms = match item {
+          PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
+          PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
+          PlayableItem::Unknown(_) => return,
+        };
 
-      if elapsed < u128::from(duration_ms) {
-        self.song_progress_ms = elapsed;
-      } else {
-        self.song_progress_ms = duration_ms.into();
+        if elapsed < u128::from(duration_ms) {
+          self.song_progress_ms = elapsed;
+        } else {
+          self.song_progress_ms = duration_ms.into();
+        }
       }
     }
   }
 
   pub fn seek_forwards(&mut self) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       let duration_ms = match item {
-        PlayingItem::Track(track) => track.duration_ms,
-        PlayingItem::Episode(episode) => episode.duration_ms,
+        PlayableItem::Track(track) => track.duration.num_milliseconds() as u32,
+        PlayableItem::Episode(episode) => episode.duration.num_milliseconds() as u32,
+        PlayableItem::Unknown(_) => return,
       };
 
       let old_progress = match self.seek_ms {
@@ -573,7 +576,7 @@ impl App {
 
   pub fn increase_volume(&mut self) {
     if let Some(context) = self.current_playback_context.clone() {
-      let current_volume = context.device.volume_percent as u8;
+      let current_volume = context.device.volume_percent.unwrap_or(0) as u8;
       let next_volume = min(
         current_volume + self.user_config.behavior.volume_increment,
         100,
@@ -587,7 +590,7 @@ impl App {
 
   pub fn decrease_volume(&mut self) {
     if let Some(context) = self.current_playback_context.clone() {
-      let current_volume = context.device.volume_percent as i8;
+      let current_volume = context.device.volume_percent.unwrap_or(0) as i8;
       let next_volume = max(
         current_volume - self.user_config.behavior.volume_increment as i8,
         0,
@@ -605,7 +608,7 @@ impl App {
   }
 
   pub fn toggle_playback(&mut self) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       is_playing: true, ..
     }) = &self.current_playback_context
     {
@@ -678,27 +681,28 @@ impl App {
       None => return,
     };
 
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => {
+        PlayableItem::Track(track) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/track/{}",
-            track.id.to_owned().unwrap_or_default()
+            track.id.as_ref().map(|i| i.id().to_string()).unwrap_or_default()
           )) {
             self.handle_error(anyhow!("failed to set clipboard content: {}", e));
           }
         }
-        PlayingItem::Episode(episode) => {
+        PlayableItem::Episode(episode) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/episode/{}",
-            episode.id.to_owned()
+            episode.id.id()
           )) {
             self.handle_error(anyhow!("failed to set clipboard content: {}", e));
           }
         }
+        PlayableItem::Unknown(_) => {}
       }
     }
   }
@@ -709,27 +713,28 @@ impl App {
       None => return,
     };
 
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => {
+        PlayableItem::Track(track) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/album/{}",
-            track.album.id.to_owned().unwrap_or_default()
+            track.album.id.as_ref().map(|i| i.id().to_string()).unwrap_or_default()
           )) {
             self.handle_error(anyhow!("failed to set clipboard content: {}", e));
           }
         }
-        PlayingItem::Episode(episode) => {
+        PlayableItem::Episode(episode) => {
           if let Err(e) = clipboard.set_text(format!(
             "https://open.spotify.com/show/{}",
-            episode.show.id.to_owned()
+            episode.show.id.id()
           )) {
             self.handle_error(anyhow!("failed to set clipboard content: {}", e));
           }
         }
+        PlayableItem::Unknown(_) => {}
       }
     }
   }
@@ -769,7 +774,7 @@ impl App {
       None => {
         if let Some(saved_artists) = &self.library.saved_artists.clone().get_results(None) {
           if let Some(last_artist) = saved_artists.items.last() {
-            self.dispatch(IoEvent::GetFollowedArtists(Some(last_artist.id.clone())));
+            self.dispatch(IoEvent::GetFollowedArtists(Some(last_artist.id.id().to_string())));
           }
         }
       }
@@ -852,8 +857,8 @@ impl App {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
             let selected_album = &albums.items[selected_index];
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id));
+            if let Some(album_id) = selected_album.id.as_ref() {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.id().to_string()));
             }
           }
         }
@@ -861,7 +866,7 @@ impl App {
       ActiveBlock::AlbumList => {
         if let Some(albums) = self.library.saved_albums.get_results(None) {
           if let Some(selected_album) = albums.items.get(self.album_list_index) {
-            let album_id = selected_album.album.id.clone();
+            let album_id = selected_album.album.id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id));
           }
         }
@@ -869,8 +874,8 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id));
+            if let Some(album_id) = selected_album.id.as_ref() {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumDelete(album_id.id().to_string()));
             }
           }
         }
@@ -885,8 +890,8 @@ impl App {
         if let Some(albums) = &self.search_results.albums {
           if let Some(selected_index) = self.search_results.selected_album_index {
             let selected_album = &albums.items[selected_index];
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id));
+            if let Some(album_id) = selected_album.id.as_ref() {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.id().to_string()));
             }
           }
         }
@@ -894,8 +899,8 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           if let Some(selected_album) = artist.albums.items.get(artist.selected_album_index) {
-            if let Some(album_id) = selected_album.id.clone() {
-              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id));
+            if let Some(album_id) = selected_album.id.as_ref() {
+              self.dispatch(IoEvent::CurrentUserSavedAlbumAdd(album_id.id().to_string()));
             }
           }
         }
@@ -956,7 +961,7 @@ impl App {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
             let selected_artist: &FullArtist = &artists.items[selected_index];
-            let artist_id = selected_artist.id.clone();
+            let artist_id = selected_artist.id.id().to_string();
             self.dispatch(IoEvent::UserUnfollowArtists(vec![artist_id]));
           }
         }
@@ -964,7 +969,7 @@ impl App {
       ActiveBlock::AlbumList => {
         if let Some(artists) = self.library.saved_artists.get_results(None) {
           if let Some(selected_artist) = artists.items.get(self.artists_list_index) {
-            let artist_id = selected_artist.id.clone();
+            let artist_id = selected_artist.id.id().to_string();
             self.dispatch(IoEvent::UserUnfollowArtists(vec![artist_id]));
           }
         }
@@ -972,7 +977,7 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          let artist_id = selected_artis.id.clone();
+          let artist_id = selected_artis.id.id().to_string();
           self.dispatch(IoEvent::UserUnfollowArtists(vec![artist_id]));
         }
       }
@@ -986,7 +991,7 @@ impl App {
         if let Some(artists) = &self.search_results.artists {
           if let Some(selected_index) = self.search_results.selected_artists_index {
             let selected_artist: &FullArtist = &artists.items[selected_index];
-            let artist_id = selected_artist.id.clone();
+            let artist_id = selected_artist.id.id().to_string();
             self.dispatch(IoEvent::UserFollowArtists(vec![artist_id]));
           }
         }
@@ -994,7 +999,7 @@ impl App {
       ActiveBlock::ArtistBlock => {
         if let Some(artist) = &self.artist {
           let selected_artis = &artist.related_artists[artist.selected_related_artist_index];
-          let artist_id = selected_artis.id.clone();
+          let artist_id = selected_artis.id.id().to_string();
           self.dispatch(IoEvent::UserFollowArtists(vec![artist_id]));
         }
       }
@@ -1010,9 +1015,9 @@ impl App {
     } = self.search_results
     {
       let selected_playlist: &SimplifiedPlaylist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
+      let selected_id = selected_playlist.id.id().to_string();
       let selected_public = selected_playlist.public;
-      let selected_owner_id = selected_playlist.owner.id.clone();
+      let selected_owner_id = selected_playlist.owner.id.id().to_string();
       self.dispatch(IoEvent::UserFollowPlaylist(
         selected_owner_id,
         selected_id,
@@ -1026,8 +1031,8 @@ impl App {
       (&self.playlists, self.selected_playlist_index, &self.user)
     {
       let selected_playlist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
-      let user_id = user.id.clone();
+      let selected_id = selected_playlist.id.id().to_string();
+      let user_id = user.id.id().to_string();
       self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, selected_id))
     }
   }
@@ -1039,8 +1044,8 @@ impl App {
       &self.user,
     ) {
       let selected_playlist = &playlists.items[selected_index];
-      let selected_id = selected_playlist.id.clone();
-      let user_id = user.id.clone();
+      let selected_id = selected_playlist.id.id().to_string();
+      let user_id = user.id.id().to_string();
       self.dispatch(IoEvent::UserUnfollowPlaylist(user_id, selected_id))
     }
   }
@@ -1050,7 +1055,7 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            if let Some(show_id) = shows.items.get(selected_index).map(|item| item.id.clone()) {
+            if let Some(show_id) = shows.items.get(selected_index).map(|item| item.id.id().to_string()) {
               self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id));
             }
           }
@@ -1059,13 +1064,13 @@ impl App {
       ActiveBlock::EpisodeTable => match self.episode_table_context {
         EpisodeTableContext::Full => {
           if let Some(selected_episode) = self.selected_show_full.clone() {
-            let show_id = selected_episode.show.id;
+            let show_id = selected_episode.show.id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id));
           }
         }
         EpisodeTableContext::Simplified => {
           if let Some(selected_episode) = self.selected_show_simplified.clone() {
-            let show_id = selected_episode.show.id;
+            let show_id = selected_episode.show.id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedShowAdd(show_id));
           }
         }
@@ -1079,7 +1084,7 @@ impl App {
       ActiveBlock::Podcasts => {
         if let Some(shows) = self.library.saved_shows.get_results(None) {
           if let Some(selected_show) = shows.items.get(self.shows_list_index) {
-            let show_id = selected_show.show.id.clone();
+            let show_id = selected_show.show.id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id));
           }
         }
@@ -1087,7 +1092,7 @@ impl App {
       ActiveBlock::SearchResultBlock => {
         if let Some(shows) = &self.search_results.shows {
           if let Some(selected_index) = self.search_results.selected_shows_index {
-            let show_id = shows.items[selected_index].id.to_owned();
+            let show_id = shows.items[selected_index].id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id));
           }
         }
@@ -1095,13 +1100,13 @@ impl App {
       ActiveBlock::EpisodeTable => match self.episode_table_context {
         EpisodeTableContext::Full => {
           if let Some(selected_episode) = self.selected_show_full.clone() {
-            let show_id = selected_episode.show.id;
+            let show_id = selected_episode.show.id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id));
           }
         }
         EpisodeTableContext::Simplified => {
           if let Some(selected_episode) = self.selected_show_simplified.clone() {
-            let show_id = selected_episode.show.id;
+            let show_id = selected_episode.show.id.id().to_string();
             self.dispatch(IoEvent::CurrentUserSavedShowDelete(show_id));
           }
         }
@@ -1138,19 +1143,20 @@ impl App {
   }
 
   pub fn get_audio_analysis(&mut self) {
-    if let Some(CurrentlyPlaybackContext {
+    if let Some(CurrentPlaybackContext {
       item: Some(item), ..
     }) = &self.current_playback_context
     {
       match item {
-        PlayingItem::Track(track) => {
+        PlayableItem::Track(track) => {
           if self.get_current_route().id != RouteId::Analysis {
-            let uri = track.uri.clone();
+            let uri = track.id.as_ref().map(|i| i.uri()).unwrap_or_default();
             self.dispatch(IoEvent::GetAudioAnalysis(uri));
             self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
           }
         }
-        PlayingItem::Episode(_episode) => {
+        PlayableItem::Unknown(_) => {}
+        PlayableItem::Episode(_episode) => {
           // No audio analysis available for podcast uris, so just default to the empty analysis
           // view to avoid a 400 error code
           self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
@@ -1177,8 +1183,8 @@ impl App {
   pub fn get_user_country(&self) -> Option<Country> {
     self
       .user
-      .to_owned()
-      .and_then(|user| Country::from_str(&user.country.unwrap_or_else(|| "".to_string())).ok())
+      .as_ref()
+      .and_then(|user| user.country)
   }
 
   pub fn calculate_help_menu_offset(&mut self) {

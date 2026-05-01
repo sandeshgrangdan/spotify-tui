@@ -7,6 +7,7 @@ use super::{
 };
 use crate::event::Key;
 use crate::network::IoEvent;
+use rspotify::prelude::Id;
 
 fn handle_down_press_on_selected_block(app: &mut App) {
   // Start selecting within the selected block
@@ -270,7 +271,7 @@ fn handle_add_item_to_queue(app: &mut App) {
         &app.search_results.tracks,
       ) {
         if let Some(track) = tracks.items.get(index) {
-          let uri = track.uri.clone();
+          let uri = track.id.as_ref().map(|i| i.uri()).unwrap_or_default();
           app.dispatch(IoEvent::AddItemToQueue(uri));
         }
       }
@@ -303,7 +304,7 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         tracks
           .items
           .into_iter()
-          .map(|track| track.uri)
+          .map(|track| track.id.as_ref().map(|i| i.uri()).unwrap_or_default())
           .collect::<Vec<String>>()
       });
       app.dispatch(IoEvent::StartPlayback(None, track_uris, index));
@@ -312,7 +313,7 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
       if let Some(index) = &app.search_results.selected_artists_index {
         if let Some(result) = app.search_results.artists.clone() {
           if let Some(artist) = result.items.get(index.to_owned()) {
-            app.get_artist(artist.id.clone(), artist.name.clone());
+            app.get_artist(artist.id.id().to_string(), artist.name.clone());
             app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
           };
         };
@@ -326,7 +327,7 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         if let Some(playlist) = playlists_result.items.get(index) {
           // Go to playlist tracks table
           app.track_table.context = Some(TrackTableContext::PlaylistSearch);
-          let playlist_id = playlist.id.to_owned();
+          let playlist_id = playlist.id.id().to_string();
           app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
         };
       }
@@ -403,7 +404,7 @@ fn handle_recommended_tracks(app: &mut App) {
       if let Some(index) = &app.search_results.selected_artists_index {
         if let Some(result) = app.search_results.artists.clone() {
           if let Some(artist) = result.items.get(index.to_owned()) {
-            let artist_id_list: Option<Vec<String>> = Some(vec![artist.id.clone()]);
+            let artist_id_list: Option<Vec<String>> = Some(vec![artist.id.id().to_string()]);
             app.recommendations_context = Some(RecommendationsContext::Artist);
             app.recommendations_seed = artist.name.clone();
             app.get_recommendations_for_seed(artist_id_list, None, None);

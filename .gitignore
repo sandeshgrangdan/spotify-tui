@@ -17,3 +17,7 @@ secrets.tar
 tags
 
 .idea
+
+# Local superpowers workspace (specs, plans, notes) — kept out of source control
+docs/superpowers/
+.claude/

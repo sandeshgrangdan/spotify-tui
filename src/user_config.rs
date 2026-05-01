@@ -5,7 +5,7 @@ use std::{
   fs,
   path::{Path, PathBuf},
 };
-use tui::style::Color;
+use ratatui::style::Color;
 
 const FILE_NAME: &str = "config.yml";
 const CONFIG_DIR: &str = ".config";
@@ -479,7 +479,7 @@ impl UserConfig {
         return Ok(());
       }
 
-      let config_yml: UserConfigString = serde_yaml::from_str(&config_string)?;
+      let config_yml: UserConfigString = serde_yml::from_str(&config_string)?;
 
       if let Some(keybindings) = config_yml.keybindings.clone() {
         self.load_keybindings(keybindings)?;
@@ -558,7 +558,7 @@ mod tests {
   #[test]
   fn parse_theme_item_test() {
     use super::parse_theme_item;
-    use tui::style::Color;
+    use ratatui::style::Color;
     assert_eq!(parse_theme_item("Reset").unwrap(), Color::Reset);
     assert_eq!(parse_theme_item("Black").unwrap(), Color::Black);
     assert_eq!(parse_theme_item("Red").unwrap(), Color::Red);

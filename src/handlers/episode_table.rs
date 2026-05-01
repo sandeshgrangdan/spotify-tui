@@ -5,6 +5,7 @@ use super::{
 use crate::app::ActiveBlock;
 use crate::event::Key;
 use crate::network::IoEvent;
+use rspotify::prelude::Id;
 
 pub fn handler(key: Key, app: &mut App) {
   match key {
@@ -69,7 +70,7 @@ fn on_enter(app: &mut App) {
     let episode_uris = episodes
       .items
       .iter()
-      .map(|episode| episode.uri.to_owned())
+      .map(|episode| episode.id.uri())
       .collect::<Vec<String>>();
     app.dispatch(IoEvent::StartPlayback(
       None,
@@ -84,16 +85,17 @@ fn handle_prev_event(app: &mut App) {
 }
 
 fn handle_next_event(app: &mut App) {
+  use rspotify::prelude::Id;
   match app.episode_table_context {
     EpisodeTableContext::Full => {
       if let Some(selected_episode) = app.selected_show_full.clone() {
-        let show_id = selected_episode.show.id;
+        let show_id = selected_episode.show.id.id().to_string();
         app.get_episode_table_next(show_id)
       }
     }
     EpisodeTableContext::Simplified => {
       if let Some(selected_episode) = app.selected_show_simplified.clone() {
-        let show_id = selected_episode.show.id;
+        let show_id = selected_episode.show.id.id().to_string();
         app.get_episode_table_next(show_id)
       }
     }
