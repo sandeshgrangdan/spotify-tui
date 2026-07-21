@@ -1,7 +1,8 @@
-use super::super::app::{ActiveBlock, App, ArtistBlock, SearchResultBlock};
+use super::super::app::{ActiveBlock, App, ArtistBlock, HomeBlock, SearchResultBlock};
 use crate::user_config::Theme;
 use rspotify::model::SimplifiedArtist;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::BorderType;
 
 pub const BASIC_VIEW_HEIGHT: u16 = 6;
 pub const SMALL_TERMINAL_WIDTH: u16 = 150;
@@ -19,6 +20,18 @@ pub fn get_search_results_highlight_state(
   )
 }
 
+pub fn get_home_highlight_state(app: &App, block_to_match: HomeBlock) -> (bool, bool) {
+  let current_route = app.get_current_route();
+  let on_home = current_route.active_block == ActiveBlock::Home
+    || current_route.hovered_block == ActiveBlock::Home;
+  let column_match = app.home_selected_block == block_to_match;
+  let is_active = current_route.active_block == ActiveBlock::Home
+    && column_match
+    && app.home_section_entered;
+  let is_hovered = on_home && column_match && !is_active;
+  (is_active, is_hovered)
+}
+
 pub fn get_artist_highlight_state(app: &App, block_to_match: ArtistBlock) -> (bool, bool) {
   let current_route = app.get_current_route();
   if let Some(artist) = &app.artist {
@@ -33,9 +46,39 @@ pub fn get_artist_highlight_state(app: &App, block_to_match: ArtistBlock) -> (bo
 
 pub fn get_color((is_active, is_hovered): (bool, bool), theme: Theme) -> Style {
   match (is_active, is_hovered) {
-    (true, _) => Style::default().fg(theme.selected),
+    (true, _) => Style::default()
+      .fg(theme.selected)
+      .add_modifier(Modifier::BOLD),
     (false, true) => Style::default().fg(theme.hovered),
     _ => Style::default().fg(theme.inactive),
+  }
+}
+
+pub fn get_border_type((is_active, _is_hovered): (bool, bool)) -> BorderType {
+  if is_active {
+    BorderType::Thick
+  } else {
+    BorderType::Plain
+  }
+}
+
+pub fn get_row_highlight_style(
+  (is_active, is_hovered): (bool, bool),
+  theme: Theme,
+) -> Style {
+  if is_active {
+    Style::default()
+      .bg(theme.selected)
+      .fg(theme.playbar_background)
+      .add_modifier(Modifier::BOLD)
+  } else if is_hovered {
+    Style::default()
+      .fg(theme.hovered)
+      .add_modifier(Modifier::BOLD)
+  } else {
+    Style::default()
+      .fg(theme.text)
+      .add_modifier(Modifier::BOLD)
   }
 }
 

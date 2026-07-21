@@ -9,7 +9,7 @@ use rspotify::prelude::{BaseClient, Id, OAuthClient};
 use rspotify::model::{
   AdditionalType, AlbumId, ArtistId, Country, EpisodeId, FullArtist, FullTrack, Market, Offset,
   Page, PlayableId, PlayableItem, PlaylistId, PlaylistItem, Recommendations, RepeatState,
-  SearchMultipleResult, SearchType, ShowId, SimplifiedAlbum, SimplifiedShow, TrackId,
+  SearchMultipleResult, SearchType, ShowId, SimplifiedAlbum, SimplifiedShow, TimeRange, TrackId,
 };
 use std::{sync::Arc, time::{Duration, Instant, SystemTime}};
 use tokio::sync::Mutex;
@@ -53,6 +53,8 @@ pub enum IoEvent {
   UserFollowPlaylist(String, String, Option<bool>),
   UserUnfollowPlaylist(String, String),
   MadeForYouSearchAndAdd(String, Option<Country>),
+  FetchMadeForYouPreview(String, Option<Country>),
+  GetTopArtists,
   GetAudioAnalysis(String),
   GetUser,
   ToggleSaveTrack(String),
@@ -71,8 +73,18 @@ pub enum IoEvent {
   CurrentUserSavedShowAdd(String),
   GetShowEpisodes(Box<SimplifiedShow>),
   GetShow(String),
+  FetchShowEpisodesForCache(String, Option<Country>),
   GetCurrentShowEpisodes(String, Option<u32>),
   AddItemToQueue(String),
+  GetQueue,
+  SkipToQueueIndex(usize),
+  FetchLyrics {
+    track_id: String,
+    artist: String,
+    track_name: String,
+    album: Option<String>,
+    duration_ms: u32,
+  },
 }
 
 /// Construct an `AuthCodeSpotify` client from the user's credentials and
@@ -214,6 +226,10 @@ impl Network {
       IoEvent::MadeForYouSearchAndAdd(search_string, country) => {
         self.made_for_you_search_and_add(search_string, country).await
       }
+      IoEvent::FetchMadeForYouPreview(playlist_id, country) => {
+        self.fetch_made_for_you_preview(playlist_id, country).await
+      }
+      IoEvent::GetTopArtists => self.get_top_artists().await,
       IoEvent::GetAudioAnalysis(uri) => self.get_audio_analysis(uri).await,
       IoEvent::ToggleSaveTrack(track_id) => self.toggle_save_track(track_id).await,
       IoEvent::GetRecommendationsForTrackId(id, country) => {
@@ -246,10 +262,22 @@ impl Network {
       }
       IoEvent::GetShowEpisodes(show) => self.get_show_episodes(show).await,
       IoEvent::GetShow(show_id) => self.get_show(show_id).await,
+      IoEvent::FetchShowEpisodesForCache(show_id, country) => {
+        self.fetch_show_episodes_for_cache(show_id, country).await
+      }
       IoEvent::GetCurrentShowEpisodes(show_id, offset) => {
         self.get_current_show_episodes(show_id, offset).await
       }
       IoEvent::AddItemToQueue(item) => self.add_item_to_queue(item).await,
+      IoEvent::GetQueue => self.get_queue().await,
+      IoEvent::SkipToQueueIndex(index) => self.skip_to_queue_index(index).await,
+      IoEvent::FetchLyrics {
+        track_id,
+        artist,
+        track_name,
+        album,
+        duration_ms,
+      } => self.fetch_lyrics(track_id, artist, track_name, album, duration_ms).await,
     }
   }
 
@@ -274,7 +302,11 @@ impl Network {
     match self.spotify.device().await {
       Ok(devices) => {
         let mut app = self.app.lock().await;
-        app.devices = Some(rspotify::model::DevicePayload { devices });
+        app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
+        if !devices.is_empty() {
+          app.devices = Some(rspotify::model::DevicePayload { devices });
+          app.selected_device_index = Some(0);
+        }
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -397,7 +429,7 @@ impl Network {
             self.set_playlist_tracks_to_table(&page).await;
             let mut app = self.app.lock().await;
             app.made_for_you_tracks = Some(page);
-            app.push_navigation_stack(RouteId::MadeForYou, ActiveBlock::MadeForYou);
+            app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
           }
           Err(e) => {
             self.handle_error(anyhow!(e)).await;
@@ -488,6 +520,30 @@ impl Network {
         self.handle_error(anyhow!("Invalid show ID: {:?}", e)).await;
       }
     }
+  }
+
+  async fn fetch_show_episodes_for_cache(
+    &mut self,
+    show_id: String,
+    country: Option<Country>,
+  ) {
+    let market = country.map(Market::Country);
+    let sid = match ShowId::from_id_or_uri(&show_id) {
+      Ok(s) => s,
+      Err(_) => return,
+    };
+    if let Ok(page) = self
+      .spotify
+      .get_shows_episodes_manual(sid.as_ref(), market, Some(10), Some(0))
+      .await
+    {
+      let mut app = self.app.lock().await;
+      app
+        .podcast_episodes_per_show
+        .insert(show_id, page.items);
+    }
+    // Silent fail — missing entry just means that show won't appear in
+    // Continue listening or Episodes for you. No error route push.
   }
 
   async fn get_current_show_episodes(&mut self, show_id: String, offset: Option<u32>) {
@@ -1289,7 +1345,7 @@ impl Network {
     country: Option<Country>,
   ) {
     let market = country.map(Market::Country);
-    match self
+    let playlist = match self
       .spotify
       .search(
         &search_string,
@@ -1302,9 +1358,34 @@ impl Network {
       .await
     {
       Ok(rspotify::model::SearchResult::Playlists(page)) => {
-        if let Some(playlist) = page.items.into_iter().next() {
-          let mut app = self.app.lock().await;
-          let page_single = Page {
+        page.items.into_iter().next()
+      }
+      Ok(_) => None,
+      Err(e) => {
+        self.handle_error(anyhow!(e)).await;
+        None
+      }
+    };
+
+    let playlist = match playlist {
+      Some(p) => p,
+      None => return,
+    };
+
+    let playlist_id = playlist.id.id().to_string();
+
+    // Merge the playlist into the single shared Page<SimplifiedPlaylist>.
+    {
+      let mut app = self.app.lock().await;
+      let pages = &mut app.library.made_for_you_playlists.pages;
+      match pages.first_mut() {
+        Some(first) => {
+          first.items.push(playlist);
+          first.total = first.items.len() as u32;
+          first.limit = first.items.len() as u32;
+        }
+        None => {
+          pages.push(Page {
             items: vec![playlist],
             href: String::new(),
             limit: 1,
@@ -1312,13 +1393,68 @@ impl Network {
             offset: 0,
             previous: None,
             total: 1,
-          };
-          app.library.made_for_you_playlists.add_pages(page_single);
+          });
         }
       }
-      Ok(_) => {}
+    }
+
+    // Fetch up to 10 tracks to derive an artist preview.
+    // Silent-fail on error — missing preview just shows the placeholder.
+    if let Ok(pid) = PlaylistId::from_id_or_uri(&playlist_id) {
+      if let Ok(track_page) = self
+        .spotify
+        .playlist_items_manual(pid.as_ref(), None, market.clone(), Some(10), Some(0))
+        .await
+      {
+        let preview = build_artists_preview(&track_page);
+        if !preview.is_empty() {
+          let mut app = self.app.lock().await;
+          app.made_for_you_previews.insert(playlist_id, preview);
+        }
+      }
+    }
+  }
+
+  /// Fetch the artist preview for a playlist we already know the id of.
+  /// Used by the new `populate_made_for_you_from_library` flow which gets
+  /// the playlist list from `current_user_playlists` rather than search.
+  async fn fetch_made_for_you_preview(
+    &mut self,
+    playlist_id: String,
+    country: Option<Country>,
+  ) {
+    let market = country.map(Market::Country);
+    if let Ok(pid) = PlaylistId::from_id_or_uri(&playlist_id) {
+      if let Ok(track_page) = self
+        .spotify
+        .playlist_items_manual(pid.as_ref(), None, market, Some(10), Some(0))
+        .await
+      {
+        let preview = build_artists_preview(&track_page);
+        if !preview.is_empty() {
+          let mut app = self.app.lock().await;
+          app.made_for_you_previews.insert(playlist_id, preview);
+        }
+      }
+    }
+  }
+
+  /// Fetch the user's top artists (medium-term) for the home page's
+  /// "Your Top Artists" section. Surface errors so the user can see why
+  /// the section is empty (missing scope, expired token, no listening
+  /// history, etc.) instead of hanging on "Loading…" forever.
+  async fn get_top_artists(&mut self) {
+    match self
+      .spotify
+      .current_user_top_artists_manual(Some(TimeRange::MediumTerm), Some(10), Some(0))
+      .await
+    {
+      Ok(page) => {
+        let mut app = self.app.lock().await;
+        app.top_artists = page.items;
+      }
       Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+        self.handle_error(anyhow!("Top artists fetch failed: {}", e)).await;
       }
     }
   }
@@ -1343,19 +1479,44 @@ impl Network {
   }
 
   async fn get_current_user_playlists(&mut self) {
-    match self
-      .spotify
-      .current_user_playlists_manual(Some(50), None)
-      .await
-    {
-      Ok(page) => {
-                let mut app = self.app.lock().await;
-        app.playlists = Some(page);
-      }
-      Err(e) => {
-                self.handle_error(anyhow!(e)).await;
+    // Paginate through ALL the user's playlists. Spotify's per-request cap is
+    // 50, so accounts with more playlists need multiple fetches. We keep
+    // accumulating until `next` is None.
+    let mut all_items = Vec::new();
+    let mut offset: u32 = 0;
+    let limit: u32 = 50;
+    loop {
+      match self
+        .spotify
+        .current_user_playlists_manual(Some(limit), Some(offset))
+        .await
+      {
+        Ok(page) => {
+          let returned = page.items.len() as u32;
+          all_items.extend(page.items);
+          if page.next.is_none() || returned < limit {
+            break;
+          }
+          offset = offset.saturating_add(limit);
+        }
+        Err(e) => {
+          self.handle_error(anyhow!(e)).await;
+          return;
+        }
       }
     }
+
+    let total = all_items.len() as u32;
+    let mut app = self.app.lock().await;
+    app.playlists = Some(Page {
+      href: String::new(),
+      items: all_items,
+      limit: total.max(1),
+      next: None,
+      offset: 0,
+      previous: None,
+      total,
+    });
   }
 
   async fn get_recently_played(&mut self) {
@@ -1495,5 +1656,380 @@ impl Network {
         .handle_error(anyhow!("Invalid queue item URI: {}", item))
         .await;
     }
+  }
+
+  async fn get_queue(&mut self) {
+    match self.spotify.current_user_queue().await {
+      Ok(queue_payload) => {
+        let mut app = self.app.lock().await;
+        let new_len = queue_payload.queue.len();
+        if app.queue_selected_index > new_len {
+          app.queue_selected_index = new_len.saturating_sub(1);
+        }
+        app.queue = Some(queue_payload);
+      }
+      Err(e) => {
+        self.handle_error(anyhow!(e)).await;
+      }
+    }
+  }
+
+  async fn skip_to_queue_index(&mut self, index: usize) {
+    for _ in 0..index {
+      if let Err(e) = self.spotify.next_track(self.client_config.device_id.as_deref()).await {
+        self.handle_error(anyhow!(e)).await;
+        break;
+      }
+    }
+    self.get_queue().await;
+  }
+
+  async fn fetch_lyrics(
+    &mut self,
+    track_id: String,
+    artist: String,
+    track_name: String,
+    _album: Option<String>,
+    duration_ms: u32,
+  ) {
+    // Strategy: try /api/get first (fast, exact match). Note we deliberately
+    // omit album_name from the query — including it makes lrclib reject
+    // legitimate matches when the album-name strings differ between Spotify's
+    // metadata and lrclib's stored entry (e.g. " (Deluxe)" suffix). On any
+    // miss/404 we fall back to /api/search which does fuzzy matching and
+    // returns a ranked list; we take the first hit.
+    let duration_seconds = duration_ms / 1000;
+    let duration_str = duration_seconds.to_string();
+    let client = reqwest::Client::new();
+
+    let lyrics_payload = fetch_lyrics_with_fallback(
+      &client,
+      &artist,
+      &track_name,
+      &duration_str,
+    )
+    .await;
+
+    let mut app = self.app.lock().await;
+    match lyrics_payload {
+      Some((synced, plain)) if !synced.is_empty() || plain.is_some() => {
+        app.lyrics = Some(crate::app::Lyrics { synced, plain });
+      }
+      _ => {
+        app.lyrics = None;
+      }
+    }
+    app.lyrics_for_track_id = Some(track_id);
+    app.lyrics_loading = false;
+  }
+}
+
+/// Fetch lyrics with a `/api/get` → `/api/search` fallback. Returns
+/// `Some((synced, plain))` on either successful path; `None` on total failure.
+async fn fetch_lyrics_with_fallback(
+  client: &reqwest::Client,
+  artist: &str,
+  track_name: &str,
+  duration_str: &str,
+) -> Option<(Vec<(u32, String)>, Option<String>)> {
+  // Path 1: /api/get with artist + track + duration (no album).
+  let get_resp = client
+    .get("https://lrclib.net/api/get")
+    .query(&[
+      ("artist_name", artist),
+      ("track_name", track_name),
+      ("duration", duration_str),
+    ])
+    .send()
+    .await;
+  if let Ok(resp) = get_resp {
+    if resp.status().is_success() {
+      if let Ok(body) = resp.json::<serde_json::Value>().await {
+        let parsed = extract_lyrics_payload(&body);
+        if parsed.is_some() {
+          return parsed;
+        }
+      }
+    }
+  }
+
+  // Path 2 (fallback): /api/search returns a ranked array. Take the first hit.
+  let search_resp = client
+    .get("https://lrclib.net/api/search")
+    .query(&[("artist_name", artist), ("track_name", track_name)])
+    .send()
+    .await;
+  if let Ok(resp) = search_resp {
+    if resp.status().is_success() {
+      if let Ok(body) = resp.json::<serde_json::Value>().await {
+        if let Some(first) = body.as_array().and_then(|a| a.first()) {
+          let parsed = extract_lyrics_payload(first);
+          if parsed.is_some() {
+            return parsed;
+          }
+        }
+      }
+    }
+  }
+
+  None
+}
+
+fn extract_lyrics_payload(
+  body: &serde_json::Value,
+) -> Option<(Vec<(u32, String)>, Option<String>)> {
+  let synced_text = body
+    .get("syncedLyrics")
+    .and_then(|v| v.as_str())
+    .map(|s| s.to_string());
+  let plain_text = body
+    .get("plainLyrics")
+    .and_then(|v| v.as_str())
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string());
+  let synced = synced_text
+    .as_deref()
+    .map(parse_lrc)
+    .unwrap_or_default();
+  if synced.is_empty() && plain_text.is_none() {
+    None
+  } else {
+    Some((synced, plain_text))
+  }
+}
+
+/// Parse an LRC-format string into `(milliseconds, line)` pairs.
+///
+/// Lines that don't start with `[<min>:<sec>]` are silently dropped.
+/// Multi-timestamp lines are not supported (only first match per line).
+fn parse_lrc(text: &str) -> Vec<(u32, String)> {
+  let mut out = Vec::new();
+  for raw_line in text.lines() {
+    let line = raw_line.trim_start();
+    if !line.starts_with('[') {
+      continue;
+    }
+    let close = match line.find(']') {
+      Some(idx) => idx,
+      None => continue,
+    };
+    let inside = &line[1..close];
+    let rest = line[close + 1..].trim_start();
+    let colon = match inside.find(':') {
+      Some(idx) => idx,
+      None => continue,
+    };
+    let minutes_str = &inside[..colon];
+    let secs_full = &inside[colon + 1..];
+    let (secs_str, frac_str) = match secs_full.find('.') {
+      Some(dot) => (&secs_full[..dot], &secs_full[dot + 1..]),
+      None => (secs_full, ""),
+    };
+    let minutes: u32 = match minutes_str.parse() {
+      Ok(n) => n,
+      Err(_) => continue,
+    };
+    let seconds: u32 = match secs_str.parse() {
+      Ok(n) => n,
+      Err(_) => continue,
+    };
+    let frac_trim = if frac_str.len() > 2 {
+      &frac_str[..2]
+    } else {
+      frac_str
+    };
+    let centis: u32 = if frac_trim.is_empty() {
+      0
+    } else {
+      match frac_trim.parse() {
+        Ok(n) => n,
+        Err(_) => continue,
+      }
+    };
+    let ms = minutes * 60_000 + seconds * 1_000 + centis * 10;
+    out.push((ms, rest.to_string()));
+  }
+  out
+}
+
+#[cfg(test)]
+mod lyrics_tests {
+  use super::parse_lrc;
+
+  #[test]
+  fn parse_lrc_basic() {
+    let input = "[00:12.34]Hello world\n[01:05.00]Second line\n";
+    assert_eq!(
+      parse_lrc(input),
+      vec![
+        (12_340, "Hello world".to_string()),
+        (65_000, "Second line".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn parse_lrc_skips_garbage_lines() {
+    let input = "garbage\n[bad:format]nope\n[01:00.00]ok\n";
+    assert_eq!(parse_lrc(input), vec![(60_000, "ok".to_string())]);
+  }
+
+  #[test]
+  fn parse_lrc_handles_three_digit_fraction() {
+    let input = "[00:01.500]a\n[00:01.567]b\n";
+    assert_eq!(
+      parse_lrc(input),
+      vec![
+        (1_500, "a".to_string()),
+        (1_560, "b".to_string()),
+      ]
+    );
+  }
+}
+
+/// Build a comma-joined preview of up to 3 unique artist names across the
+/// tracks in `track_page`. If there are 4 or more distinct artists overall,
+/// append " and more"; if 1-3 distinct artists, return them as a plain join;
+/// if zero (e.g. empty page or all-episode page), return an empty string.
+fn build_artists_preview(track_page: &Page<PlaylistItem>) -> String {
+  let mut unique: Vec<String> = Vec::new();
+  let mut more = false;
+  'outer: for item in track_page.items.iter() {
+    if let Some(PlayableItem::Track(track)) = &item.track {
+      for artist in &track.artists {
+        if unique.iter().any(|n| n == &artist.name) {
+          continue;
+        }
+        if unique.len() == 3 {
+          more = true;
+          break 'outer;
+        }
+        unique.push(artist.name.clone());
+      }
+    }
+  }
+  if unique.is_empty() {
+    return String::new();
+  }
+  let joined = unique.join(", ");
+  if more {
+    format!("{} and more", joined)
+  } else {
+    joined
+  }
+}
+
+#[cfg(test)]
+mod artists_preview_tests {
+  use super::build_artists_preview;
+  use chrono::TimeDelta;
+  use rspotify::model::{
+    album::SimplifiedAlbum, artist::SimplifiedArtist, track::FullTrack,
+    Page, PlayableItem, PlaylistItem,
+  };
+
+  fn make_artist(name: &str) -> SimplifiedArtist {
+    SimplifiedArtist {
+      external_urls: Default::default(),
+      href: None,
+      id: None,
+      name: name.to_string(),
+    }
+  }
+
+  fn make_track(artists: Vec<&str>) -> PlaylistItem {
+    let full_track = FullTrack {
+      album: SimplifiedAlbum {
+        album_group: None,
+        album_type: None,
+        artists: vec![],
+        available_markets: vec![],
+        external_urls: Default::default(),
+        href: None,
+        id: None,
+        images: vec![],
+        name: String::new(),
+        release_date: None,
+        release_date_precision: None,
+        restrictions: None,
+      },
+      artists: artists.into_iter().map(make_artist).collect(),
+      available_markets: vec![],
+      disc_number: 1,
+      duration: TimeDelta::seconds(0),
+      explicit: false,
+      external_ids: Default::default(),
+      external_urls: Default::default(),
+      href: None,
+      id: None,
+      is_local: false,
+      is_playable: None,
+      linked_from: None,
+      name: String::new(),
+      popularity: 0,
+      preview_url: None,
+      restrictions: None,
+      track_number: 0,
+      r#type: rspotify::model::Type::Track,
+    };
+    PlaylistItem {
+      added_at: None,
+      added_by: None,
+      is_local: false,
+      track: Some(PlayableItem::Track(full_track)),
+      item: None,
+    }
+  }
+
+  fn page(items: Vec<PlaylistItem>) -> Page<PlaylistItem> {
+    Page {
+      href: String::new(),
+      items,
+      limit: 10,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 0,
+    }
+  }
+
+  #[test]
+  fn one_unique_artist() {
+    let p = page(vec![
+      make_track(vec!["Slayer"]),
+      make_track(vec!["Slayer"]),
+    ]);
+    assert_eq!(build_artists_preview(&p), "Slayer");
+  }
+
+  #[test]
+  fn exactly_three_unique_artists() {
+    let p = page(vec![
+      make_track(vec!["Slayer"]),
+      make_track(vec!["Linkin Park"]),
+      make_track(vec!["Metallica"]),
+    ]);
+    assert_eq!(build_artists_preview(&p), "Slayer, Linkin Park, Metallica");
+  }
+
+  #[test]
+  fn four_or_more_unique_artists_appends_and_more() {
+    let p = page(vec![
+      make_track(vec!["Slayer"]),
+      make_track(vec!["Linkin Park"]),
+      make_track(vec!["Metallica"]),
+      make_track(vec!["Pantera"]),
+      make_track(vec!["Megadeth"]),
+    ]);
+    assert_eq!(
+      build_artists_preview(&p),
+      "Slayer, Linkin Park, Metallica and more"
+    );
+  }
+
+  #[test]
+  fn empty_page_returns_empty_string() {
+    let p = page(vec![]);
+    assert_eq!(build_artists_preview(&p), "");
   }
 }

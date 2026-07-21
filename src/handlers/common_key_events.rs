@@ -80,7 +80,10 @@ pub fn on_low_press_handler<T>(selection_data: &[T]) -> usize {
 
 pub fn handle_right_event(app: &mut App) {
   match app.get_current_route().hovered_block {
-    ActiveBlock::MyPlaylists | ActiveBlock::Library => match app.get_current_route().id {
+    ActiveBlock::MyPlaylists | ActiveBlock::Library | ActiveBlock::Devices => match app
+      .get_current_route()
+      .id
+    {
       RouteId::AlbumTracks => {
         app.set_current_route_state(
           Some(ActiveBlock::AlbumTracks),
@@ -134,6 +137,7 @@ pub fn handle_right_event(app: &mut App) {
       RouteId::Error => {}
       RouteId::Analysis => {}
       RouteId::BasicView => {}
+      RouteId::Queue => {}
       RouteId::Dialog => {}
     },
     _ => {}

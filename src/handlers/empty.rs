@@ -9,21 +9,27 @@ pub fn handler(key: Key, app: &mut App) {
   match key {
     Key::Enter => {
       let current_hovered = app.get_current_route().hovered_block;
+      if current_hovered == ActiveBlock::Home {
+        app.home_section_entered = false;
+      }
       app.set_current_route_state(Some(current_hovered), None);
     }
     k if common_key_events::down_event(k) => match app.get_current_route().hovered_block {
       ActiveBlock::Library => {
         app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
       }
+      ActiveBlock::MyPlaylists => {
+        app.set_current_route_state(None, Some(ActiveBlock::Devices));
+      }
       ActiveBlock::ArtistBlock
       | ActiveBlock::AlbumList
       | ActiveBlock::AlbumTracks
       | ActiveBlock::Artists
       | ActiveBlock::Podcasts
+      | ActiveBlock::Devices
       | ActiveBlock::EpisodeTable
       | ActiveBlock::Home
       | ActiveBlock::MadeForYou
-      | ActiveBlock::MyPlaylists
       | ActiveBlock::RecentlyPlayed
       | ActiveBlock::TrackTable => {
         app.set_current_route_state(None, Some(ActiveBlock::PlayBar));
@@ -34,8 +40,11 @@ pub fn handler(key: Key, app: &mut App) {
       ActiveBlock::MyPlaylists => {
         app.set_current_route_state(None, Some(ActiveBlock::Library));
       }
-      ActiveBlock::PlayBar => {
+      ActiveBlock::Devices => {
         app.set_current_route_state(None, Some(ActiveBlock::MyPlaylists));
+      }
+      ActiveBlock::PlayBar => {
+        app.set_current_route_state(None, Some(ActiveBlock::Devices));
       }
       _ => {}
     },

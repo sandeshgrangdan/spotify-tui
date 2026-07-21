@@ -1,12 +1,9 @@
 pub mod audio_analysis;
 pub mod help;
 pub mod util;
-use super::{
-  app::{
-    ActiveBlock, AlbumTableContext, App, ArtistBlock, EpisodeTableContext, RecommendationsContext,
-    RouteId, SearchResultBlock, LIBRARY_OPTIONS,
-  },
-  banner::BANNER,
+use super::app::{
+  ActiveBlock, AlbumTableContext, App, ArtistBlock, EpisodeTableContext, HomeBlock, HomeMode,
+  RecommendationsContext, RouteId, SearchResultBlock, LIBRARY_OPTIONS,
 };
 use help::get_help_docs;
 use rspotify::model::ResumePoint;
@@ -17,13 +14,17 @@ use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   style::{Modifier, Style},
   text::{Line, Span, Text},
-  widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
+  widgets::{
+    Block, BorderType, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Row, Table,
+    Wrap,
+  },
   Frame,
 };
 use util::{
-  create_artist_string, display_track_progress, get_artist_highlight_state, get_color,
-  get_percentage_width, get_search_results_highlight_state, get_track_progress_percentage,
-  millis_to_minutes, BASIC_VIEW_HEIGHT, SMALL_TERMINAL_WIDTH,
+  create_artist_string, display_track_progress, get_artist_highlight_state, get_border_type,
+  get_color, get_home_highlight_state, get_percentage_width, get_row_highlight_style,
+  get_search_results_highlight_state, get_track_progress_percentage, millis_to_minutes,
+  BASIC_VIEW_HEIGHT, SMALL_TERMINAL_WIDTH,
 };
 
 pub enum TableId {
@@ -144,6 +145,7 @@ pub fn draw_input_and_help_box(f: &mut Frame, app: &App, layout_chunk: Rect)
   let input = Paragraph::new(lines).block(
     Block::default()
       .borders(Borders::ALL)
+      .border_type(get_border_type(highlight_state))
       .title(Span::styled(
         "Search",
         get_color(highlight_state, app.user_config.theme),
@@ -171,6 +173,87 @@ pub fn draw_input_and_help_box(f: &mut Frame, app: &App, layout_chunk: Rect)
   f.render_widget(help, chunks[1]);
 }
 
+pub fn draw_top_bar(f: &mut Frame, app: &App, layout_chunk: Rect)
+{
+  let theme = app.user_config.theme;
+
+  // Two stacked rows: content row + a thin horizontal rule.
+  let chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Length(1), Constraint::Length(1)].as_ref())
+    .split(layout_chunk);
+
+  // Row 1: tabs left, greeting right.
+  let row1 = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+    .split(chunks[0]);
+
+  let podcast_active = matches!(app.home_mode, HomeMode::Podcast);
+  let active_tab_style = Style::default()
+    .fg(theme.banner)
+    .add_modifier(Modifier::BOLD);
+  let inactive_tab_style = Style::default().fg(theme.inactive);
+
+  let music_style = if podcast_active {
+    inactive_tab_style
+  } else {
+    active_tab_style
+  };
+  let podcasts_style = if podcast_active {
+    active_tab_style
+  } else {
+    inactive_tab_style
+  };
+
+  // Lyrics ON/OFF status pill — sits between the tabs and the greeting so
+  // the user can see the key actually fired.
+  let (lyrics_status_text, lyrics_status_style) = if app.lyrics_visible {
+    (
+      "  Lyrics: ON ",
+      Style::default()
+        .fg(theme.banner)
+        .add_modifier(Modifier::BOLD),
+    )
+  } else {
+    ("  Lyrics: OFF ", Style::default().fg(theme.inactive))
+  };
+
+  let tabs = Paragraph::new(Line::from(vec![
+    Span::styled("  Music", music_style),
+    Span::raw("   "),
+    Span::styled("Podcasts", podcasts_style),
+    Span::raw("   "),
+    Span::styled(lyrics_status_text, lyrics_status_style),
+  ]));
+  f.render_widget(tabs, row1[0]);
+
+  let display_name = app
+    .user
+    .as_ref()
+    .and_then(|u| u.display_name.clone())
+    .unwrap_or_default();
+
+  let greeting_text = if display_name.is_empty() {
+    String::new()
+  } else {
+    format!("Hi, {}  ", display_name)
+  };
+
+  let greeting = Paragraph::new(Line::from(Span::styled(
+    greeting_text,
+    Style::default().fg(theme.text),
+  )))
+  .alignment(Alignment::Right);
+  f.render_widget(greeting, row1[1]);
+
+  // Row 2: a single horizontal rule across the full width.
+  let rule = Block::default()
+    .borders(Borders::TOP)
+    .border_style(Style::default().fg(theme.inactive));
+  f.render_widget(rule, chunks[1]);
+}
+
 pub fn draw_main_layout(f: &mut Frame, app: &App)
 {
   let margin = util::get_main_layout_margin(app);
@@ -178,15 +261,25 @@ pub fn draw_main_layout(f: &mut Frame, app: &App)
   if app.size.width >= SMALL_TERMINAL_WIDTH && !app.user_config.behavior.enforce_wide_search_bar {
     let parent_layout = Layout::default()
       .direction(Direction::Vertical)
-      .constraints([Constraint::Min(1), Constraint::Length(6)].as_ref())
+      .constraints(
+        [
+          Constraint::Length(2),
+          Constraint::Min(1),
+          Constraint::Length(6),
+        ]
+        .as_ref(),
+      )
       .margin(margin)
       .split(f.size());
 
+    // Top bar (Music | Podcasts + greeting)
+    draw_top_bar(f, app, parent_layout[0]);
+
     // Nested main block with potential routes
-    draw_routes(f, app, parent_layout[0]);
+    draw_routes(f, app, parent_layout[1]);
 
     // Currently playing
-    draw_playbar(f, app, parent_layout[1]);
+    draw_playbar(f, app, parent_layout[2]);
   } else {
     let parent_layout = Layout::default()
       .direction(Direction::Vertical)
@@ -226,42 +319,55 @@ pub fn draw_routes(f: &mut Frame, app: &App, layout_chunk: Rect)
 
   let current_route = app.get_current_route();
 
+  let (content_area, lyrics_area) = if app.lyrics_visible {
+    let split = Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Percentage(65), Constraint::Percentage(35)].as_ref())
+      .split(chunks[1]);
+    (split[0], Some(split[1]))
+  } else {
+    (chunks[1], None)
+  };
+
   match current_route.id {
     RouteId::Search => {
-      draw_search_results(f, app, chunks[1]);
+      draw_search_results(f, app, content_area);
     }
     RouteId::TrackTable => {
-      draw_song_table(f, app, chunks[1]);
+      draw_song_table(f, app, content_area);
     }
     RouteId::AlbumTracks => {
-      draw_album_table(f, app, chunks[1]);
+      draw_album_table(f, app, content_area);
     }
     RouteId::RecentlyPlayed => {
-      draw_recently_played_table(f, app, chunks[1]);
+      draw_recently_played_table(f, app, content_area);
     }
     RouteId::Artist => {
-      draw_artist_albums(f, app, chunks[1]);
+      draw_artist_albums(f, app, content_area);
     }
     RouteId::AlbumList => {
-      draw_album_list(f, app, chunks[1]);
+      draw_album_list(f, app, content_area);
     }
     RouteId::PodcastEpisodes => {
-      draw_show_episodes(f, app, chunks[1]);
+      draw_show_episodes(f, app, content_area);
     }
     RouteId::Home => {
-      draw_home(f, app, chunks[1]);
+      draw_home(f, app, content_area);
     }
     RouteId::MadeForYou => {
-      draw_made_for_you(f, app, chunks[1]);
+      draw_made_for_you(f, app, content_area);
     }
     RouteId::Artists => {
-      draw_artist_table(f, app, chunks[1]);
+      draw_artist_table(f, app, content_area);
     }
     RouteId::Podcasts => {
-      draw_podcast_table(f, app, chunks[1]);
+      draw_podcast_table(f, app, content_area);
+    }
+    RouteId::Queue => {
+      draw_queue(f, app, content_area);
     }
     RouteId::Recommendations => {
-      draw_recommendations_table(f, app, chunks[1]);
+      draw_recommendations_table(f, app, content_area);
     }
     RouteId::Error => {} // This is handled as a "full screen" route in main.rs
     RouteId::SelectedDevice => {} // This is handled as a "full screen" route in main.rs
@@ -269,6 +375,10 @@ pub fn draw_routes(f: &mut Frame, app: &App, layout_chunk: Rect)
     RouteId::BasicView => {} // This is handled as a "full screen" route in main.rs
     RouteId::Dialog => {} // This is handled in the draw_dialog function in mod.rs
   };
+
+  if let Some(area) = lyrics_area {
+    draw_lyrics_panel(f, app, area);
+  }
 }
 
 pub fn draw_library_block(f: &mut Frame, app: &App, layout_chunk: Rect)
@@ -291,17 +401,16 @@ pub fn draw_library_block(f: &mut Frame, app: &App, layout_chunk: Rect)
 
 pub fn draw_playlist_block(f: &mut Frame, app: &App, layout_chunk: Rect)
 {
-  let playlist_items = match &app.playlists {
-    Some(p) => p.items.iter().map(|item| item.name.to_owned()).collect(),
-    None => vec![],
-  };
-
   let current_route = app.get_current_route();
-
   let highlight_state = (
     current_route.active_block == ActiveBlock::MyPlaylists,
     current_route.hovered_block == ActiveBlock::MyPlaylists,
   );
+
+  let playlist_items: Vec<String> = match &app.playlists {
+    Some(p) => p.items.iter().map(|item| item.name.to_owned()).collect(),
+    None => vec![],
+  };
 
   draw_selectable_list(
     f,
@@ -314,6 +423,43 @@ pub fn draw_playlist_block(f: &mut Frame, app: &App, layout_chunk: Rect)
   );
 }
 
+pub fn draw_devices_block(f: &mut Frame, app: &App, layout_chunk: Rect)
+{
+  let current_route = app.get_current_route();
+  let highlight_state = (
+    current_route.active_block == ActiveBlock::Devices,
+    current_route.hovered_block == ActiveBlock::Devices,
+  );
+
+  let device_items: Vec<String> = app
+    .devices
+    .as_ref()
+    .map(|d| {
+      if d.devices.is_empty() {
+        vec!["No devices found".to_owned()]
+      } else {
+        d.devices
+          .iter()
+          .map(|dev| {
+            let active = if dev.is_active { " ●" } else { "" };
+            format!("{}{}", dev.name, active)
+          })
+          .collect()
+      }
+    })
+    .unwrap_or_else(|| vec!["Press d to load…".to_owned()]);
+
+  draw_selectable_list(
+    f,
+    app,
+    layout_chunk,
+    "Devices",
+    &device_items,
+    highlight_state,
+    app.selected_device_index.or(Some(0)),
+  );
+}
+
 pub fn draw_user_block(f: &mut Frame, app: &App, layout_chunk: Rect)
 {
   // Check for width to make a responsive layout
@@ -323,26 +469,34 @@ pub fn draw_user_block(f: &mut Frame, app: &App, layout_chunk: Rect)
       .constraints(
         [
           Constraint::Length(3),
-          Constraint::Percentage(30),
-          Constraint::Percentage(70),
+          Constraint::Percentage(28),
+          Constraint::Percentage(45),
+          Constraint::Percentage(27),
         ]
         .as_ref(),
       )
       .split(layout_chunk);
 
-    // Search input and help
     draw_input_and_help_box(f, app, chunks[0]);
     draw_library_block(f, app, chunks[1]);
     draw_playlist_block(f, app, chunks[2]);
+    draw_devices_block(f, app, chunks[3]);
   } else {
     let chunks = Layout::default()
       .direction(Direction::Vertical)
-      .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
+      .constraints(
+        [
+          Constraint::Percentage(28),
+          Constraint::Percentage(45),
+          Constraint::Percentage(27),
+        ]
+        .as_ref(),
+      )
       .split(layout_chunk);
 
-    // Search input and help
     draw_library_block(f, app, chunks[0]);
     draw_playlist_block(f, app, chunks[1]);
+    draw_devices_block(f, app, chunks[2]);
   }
 }
 
@@ -618,6 +772,199 @@ pub fn draw_podcast_table(f: &mut Frame, app: &App, layout_chunk: Rect)
       highlight_state,
     )
   };
+}
+
+pub fn draw_queue(f: &mut Frame, app: &App, layout_chunk: Rect)
+{
+  let theme = app.user_config.theme;
+  let current_route = app.get_current_route();
+  let highlight_state = (
+    current_route.active_block == ActiveBlock::Queue,
+    current_route.hovered_block == ActiveBlock::Queue,
+  );
+
+  // Vertical: list (Min) + 1-row hint footer at the bottom.
+  let chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Min(1), Constraint::Length(1)].as_ref())
+    .split(layout_chunk);
+
+  // Build the row strings from app.queue.
+  let rows: Vec<String> = match &app.queue {
+    None => vec!["Loading queue…".to_owned()],
+    Some(payload) if payload.queue.is_empty() => {
+      vec!["Queue is empty — add tracks with z.".to_owned()]
+    }
+    Some(payload) => {
+      let mut out: Vec<String> = Vec::with_capacity(payload.queue.len() + 1);
+      if let Some(playing) = &payload.currently_playing {
+        out.push(format!("▶ {}", queue_row_text(playing)));
+      }
+      for item in &payload.queue {
+        out.push(format!("  {}", queue_row_text(item)));
+      }
+      out
+    }
+  };
+
+  // Clamp the selection one more time at render (defence in depth).
+  let len = rows.len();
+  let selected_index = if len == 0 {
+    0
+  } else {
+    app.queue_selected_index.min(len.saturating_sub(1))
+  };
+
+  let mut state = ListState::default();
+  state.select(Some(selected_index));
+
+  let lst_items: Vec<ListItem> = rows
+    .iter()
+    .map(|s| ListItem::new(Span::raw(s.as_str())))
+    .collect();
+
+  let list = List::new(lst_items)
+    .block(
+      Block::default()
+        .title(Span::styled(
+          "Queue",
+          get_color(highlight_state, theme),
+        ))
+        .borders(Borders::ALL)
+        .border_type(get_border_type(highlight_state))
+        .border_style(get_color(highlight_state, theme)),
+    )
+    .style(Style::default().fg(theme.text))
+    .highlight_style(get_row_highlight_style(highlight_state, theme));
+  f.render_stateful_widget(list, chunks[0], &mut state);
+
+  let hint = Paragraph::new(Line::from(Span::styled(
+    "j/k move · x pop next · Enter skip-to-here · q back",
+    Style::default().fg(theme.inactive),
+  )));
+  f.render_widget(hint, chunks[1]);
+}
+
+fn queue_row_text(item: &PlayableItem) -> String {
+  match item {
+    PlayableItem::Track(track) => {
+      format!("{} — {}", track.name, create_artist_string(&track.artists))
+    }
+    PlayableItem::Episode(episode) => {
+      format!("{} — {}", episode.name, episode.show.name)
+    }
+    PlayableItem::Unknown(_) => "(unknown item)".to_owned(),
+  }
+}
+
+pub fn draw_lyrics_panel(f: &mut Frame, app: &App, layout_chunk: Rect)
+{
+  let theme = app.user_config.theme;
+  let block = Block::default()
+    .title(Span::styled(
+      "Lyrics",
+      Style::default().fg(theme.banner).add_modifier(Modifier::BOLD),
+    ))
+    .borders(Borders::ALL)
+    .border_type(BorderType::Plain)
+    .border_style(Style::default().fg(theme.inactive));
+  let inner = block.inner(layout_chunk);
+  f.render_widget(block, layout_chunk);
+
+  let placeholder = lyrics_placeholder(app);
+  if let Some(text) = placeholder {
+    let p = Paragraph::new(Line::from(Span::styled(
+      text,
+      Style::default().fg(theme.inactive),
+    )));
+    f.render_widget(p, inner);
+    return;
+  }
+
+  let lyrics = match &app.lyrics {
+    Some(l) => l,
+    None => return,
+  };
+
+  if !lyrics.synced.is_empty() {
+    let progress_ms = app.song_progress_ms as u32;
+    let current = lyrics
+      .synced
+      .iter()
+      .rposition(|(t, _)| *t <= progress_ms)
+      .unwrap_or(0);
+
+    let visible_rows = inner.height as usize;
+    if visible_rows == 0 {
+      return;
+    }
+    let total = lyrics.synced.len();
+    let half = visible_rows / 2;
+    let max_offset = total.saturating_sub(visible_rows);
+    let offset = current.saturating_sub(half).min(max_offset);
+
+    let items: Vec<ListItem> = lyrics
+      .synced
+      .iter()
+      .enumerate()
+      .map(|(i, (_, line))| {
+        let style = if i == current {
+          Style::default()
+            .fg(theme.selected)
+            .add_modifier(Modifier::BOLD)
+        } else {
+          Style::default().fg(theme.playbar_text)
+        };
+        ListItem::new(Span::styled(line.clone(), style))
+      })
+      .collect();
+
+    let mut state = ListState::default();
+    *state.offset_mut() = offset;
+    state.select(Some(current));
+    let list = List::new(items);
+    f.render_stateful_widget(list, inner, &mut state);
+    return;
+  }
+
+  if let Some(plain) = &lyrics.plain {
+    let lines: Vec<Line> = plain
+      .lines()
+      .map(|s| Line::from(Span::styled(s.to_string(), Style::default().fg(theme.playbar_text))))
+      .collect();
+    let p = Paragraph::new(lines);
+    f.render_widget(p, inner);
+  }
+}
+
+fn lyrics_placeholder(app: &App) -> Option<&'static str> {
+  if app.lyrics_loading && app.lyrics.is_none() {
+    return Some("✓ Lyrics panel ON — fetching from lrclib.net…");
+  }
+  let context = match &app.current_playback_context {
+    Some(c) => c,
+    None => return Some("✓ Lyrics panel ON — start a track to see lyrics"),
+  };
+  let item = match &context.item {
+    Some(i) => i,
+    None => return Some("✓ Lyrics panel ON — start a track to see lyrics"),
+  };
+  match item {
+    PlayableItem::Episode(_) => {
+      return Some("✓ Lyrics panel ON — podcasts don't have lyrics")
+    }
+    PlayableItem::Unknown(_) => {
+      return Some("✓ Lyrics panel ON — track type unknown, no lyrics")
+    }
+    PlayableItem::Track(_) => {}
+  }
+  match &app.lyrics {
+    None => Some("✓ Lyrics panel ON — lrclib has no match for this track"),
+    Some(l) if l.synced.is_empty() && l.plain.is_none() => {
+      Some("✓ Lyrics panel ON — lrclib has no match for this track")
+    }
+    Some(_) => None,
+  }
 }
 
 pub fn draw_album_table(f: &mut Frame, app: &App, layout_chunk: Rect)
@@ -896,137 +1243,171 @@ pub fn draw_basic_view(f: &mut Frame, app: &App)
 
 pub fn draw_playbar(f: &mut Frame, app: &App, layout_chunk: Rect)
 {
+  let theme = app.user_config.theme;
+  let behavior = &app.user_config.behavior;
+
+  // Early return if there's nothing to render — matches today's behaviour.
+  let context = match &app.current_playback_context {
+    Some(c) => c,
+    None => return,
+  };
+  let track_item = match &context.item {
+    Some(i) => i,
+    None => return,
+  };
+  if matches!(track_item, PlayableItem::Unknown(_)) {
+    return;
+  }
+
+  // Outer border around the playbar (subtle, inactive color so it frames
+  // without competing with focused-panel highlights elsewhere).
+  let outer_block = Block::default()
+    .borders(Borders::ALL)
+    .border_type(BorderType::Plain)
+    .border_style(Style::default().fg(theme.inactive));
+  let inner_area = outer_block.inner(layout_chunk);
+  f.render_widget(outer_block, layout_chunk);
+
+  // Inside the border (inner_area is 4 rows tall after the border consumes
+  // 1 row top + 1 row bottom from the 6-row playbar budget):
+  //   info row (2) + spacer (1) + progress row (1) = 4
   let chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints(
       [
-        Constraint::Percentage(50),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
       ]
       .as_ref(),
     )
-    .margin(1)
-    .split(layout_chunk);
+    .horizontal_margin(1)
+    .split(inner_area);
 
-  // If no track is playing, render paragraph showing which device is selected, if no selected
-  // give hint to choose a device
-  if let Some(current_playback_context) = &app.current_playback_context {
-    if let Some(track_item) = &current_playback_context.item {
-      let play_title = if current_playback_context.is_playing {
-        "Playing"
-      } else {
-        "Paused"
-      };
+  // Info row split horizontally 35 / 35 / 30.
+  let info = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints(
+      [
+        Constraint::Percentage(35),
+        Constraint::Percentage(35),
+        Constraint::Percentage(30),
+      ]
+      .as_ref(),
+    )
+    .split(chunks[0]);
 
-      let shuffle_text = if current_playback_context.shuffle_state {
-        "On"
-      } else {
-        "Off"
-      };
+  // ── Left: track name + artist ──
+  let (item_id, name, duration_ms) = match track_item {
+    PlayableItem::Track(track) => (
+      track.id.as_ref().map(|i| i.id().to_string()).unwrap_or_default(),
+      track.name.to_owned(),
+      track.duration.num_milliseconds() as u32,
+    ),
+    PlayableItem::Episode(episode) => (
+      episode.id.id().to_string(),
+      episode.name.to_owned(),
+      episode.duration.num_milliseconds() as u32,
+    ),
+    PlayableItem::Unknown(_) => return,
+  };
 
-      let repeat_text = match current_playback_context.repeat_state {
-        RepeatState::Off => "Off",
-        RepeatState::Track => "Track",
-        RepeatState::Context => "All",
-      };
+  let liked_prefix = if app.liked_song_ids_set.contains(&item_id) {
+    app.user_config.padded_liked_icon()
+  } else {
+    String::new()
+  };
 
-      let title = format!(
-        "{:-7} ({} | Shuffle: {:-3} | Repeat: {:-5} | Volume: {:-2}%)",
-        play_title,
-        current_playback_context.device.name,
-        shuffle_text,
-        repeat_text,
-        current_playback_context.device.volume_percent.unwrap_or(0)
-      );
+  let artist_text = match track_item {
+    PlayableItem::Track(track) => create_artist_string(&track.artists),
+    PlayableItem::Episode(episode) => format!("{} - {}", episode.name, episode.show.name),
+    PlayableItem::Unknown(_) => String::new(),
+  };
 
-      let current_route = app.get_current_route();
-      let highlight_state = (
-        current_route.active_block == ActiveBlock::PlayBar,
-        current_route.hovered_block == ActiveBlock::PlayBar,
-      );
+  let left = Paragraph::new(Text::from(vec![
+    Line::from(Span::styled(
+      name,
+      Style::default().fg(theme.selected).add_modifier(Modifier::BOLD),
+    )),
+    Line::from(Span::styled(
+      format!("{}{}", liked_prefix, artist_text),
+      Style::default().fg(theme.playbar_text),
+    )),
+  ]));
+  f.render_widget(left, info[0]);
 
-      let title_block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-          &title,
-          get_color(highlight_state, app.user_config.theme),
-        ))
-        .border_style(get_color(highlight_state, app.user_config.theme));
+  // ── Center: compact text status (Playing/Paused · Shuffle · Repeat) ──
+  // No fake-button glyphs; controls happen via keybindings (space, n, p,
+  // Ctrl-S, Ctrl-R — see `?` help).
+  let active_text_style = Style::default().fg(theme.playbar_text);
+  let inactive_text_style = Style::default().fg(theme.inactive);
 
-      f.render_widget(title_block, layout_chunk);
+  let play_state_text = if context.is_playing { "Playing" } else { "Paused" };
 
-      let (item_id, name, duration_ms) = match track_item {
-        PlayableItem::Track(track) => (
-          track.id.as_ref().map(|i| i.id().to_string()).unwrap_or_default(),
-          track.name.to_owned(),
-          track.duration.num_milliseconds() as u32,
-        ),
-        PlayableItem::Episode(episode) => (
-          episode.id.id().to_string(),
-          episode.name.to_owned(),
-          episode.duration.num_milliseconds() as u32,
-        ),
-        PlayableItem::Unknown(_) => return,
-      };
+  let (shuffle_label, shuffle_style) = if context.shuffle_state {
+    ("Shuffle: On", active_text_style)
+  } else {
+    ("Shuffle: Off", inactive_text_style)
+  };
 
-      let track_name = if app.liked_song_ids_set.contains(&item_id) {
-        format!("{}{}", &app.user_config.padded_liked_icon(), name)
-      } else {
-        name
-      };
+  let (repeat_label, repeat_style) = match context.repeat_state {
+    RepeatState::Track => ("Repeat: Track", active_text_style),
+    RepeatState::Context => ("Repeat: All", active_text_style),
+    RepeatState::Off => ("Repeat: Off", inactive_text_style),
+  };
 
-      let play_bar_text = match track_item {
-        PlayableItem::Track(track) => create_artist_string(&track.artists),
-        PlayableItem::Episode(episode) => format!("{} - {}", episode.name, episode.show.name),
-        PlayableItem::Unknown(_) => String::new(),
-      };
+  let center = Paragraph::new(Line::from(vec![
+    Span::styled(
+      play_state_text,
+      active_text_style.add_modifier(Modifier::BOLD),
+    ),
+    Span::styled("  ·  ", inactive_text_style),
+    Span::styled(shuffle_label, shuffle_style),
+    Span::styled("  ·  ", inactive_text_style),
+    Span::styled(repeat_label, repeat_style),
+  ]))
+  .alignment(Alignment::Center);
+  f.render_widget(center, info[1]);
 
-      let lines = Text::from(Span::styled(
-        play_bar_text,
-        Style::default().fg(app.user_config.theme.playbar_text),
-      ));
+  // ── Right: device · volume ──
+  let volume_text = match context.device.volume_percent {
+    Some(v) => format!("{}%", v),
+    None => "--%".to_owned(),
+  };
+  let right = Paragraph::new(Line::from(Span::styled(
+    format!("{} · {}", context.device.name, volume_text),
+    Style::default().fg(theme.playbar_text),
+  )))
+  .alignment(Alignment::Right);
+  f.render_widget(right, info[2]);
 
-      let artist = Paragraph::new(lines)
-        .style(Style::default().fg(app.user_config.theme.playbar_text))
-        .block(
-          Block::default().title(Span::styled(
-            &track_name,
-            Style::default()
-              .fg(app.user_config.theme.selected)
-              .add_modifier(Modifier::BOLD),
-          )),
-        );
-      f.render_widget(artist, chunks[0]);
-
-      let progress_ms = match app.seek_ms {
-        Some(seek_ms) => seek_ms,
-        None => app.song_progress_ms,
-      };
-
-      let perc = get_track_progress_percentage(progress_ms, duration_ms);
-
-      let song_progress_label = display_track_progress(progress_ms, duration_ms);
-      let modifier = if app.user_config.behavior.enable_text_emphasis {
-        Modifier::ITALIC | Modifier::BOLD
-      } else {
-        Modifier::empty()
-      };
-      let song_progress = Gauge::default()
-        .gauge_style(
-          Style::default()
-            .fg(app.user_config.theme.playbar_progress)
-            .bg(app.user_config.theme.playbar_background)
-            .add_modifier(modifier),
-        )
-        .percent(perc)
-        .label(Span::styled(
-          &song_progress_label,
-          Style::default().fg(app.user_config.theme.playbar_progress_text),
-        ));
-      f.render_widget(song_progress, chunks[2]);
-    }
-  }
+  // ── Original full-width Gauge (solid filled bar with centered label) ──
+  let progress_ms = match app.seek_ms {
+    Some(seek_ms) => seek_ms,
+    None => app.song_progress_ms,
+  };
+  let perc = get_track_progress_percentage(progress_ms, duration_ms);
+  let song_progress_label = display_track_progress(progress_ms, duration_ms);
+  let modifier = if behavior.enable_text_emphasis {
+    Modifier::ITALIC | Modifier::BOLD
+  } else {
+    Modifier::empty()
+  };
+  let song_progress = Gauge::default()
+    .gauge_style(
+      Style::default()
+        .fg(theme.playbar_progress)
+        .bg(theme.playbar_background)
+        .add_modifier(modifier),
+    )
+    .percent(perc)
+    .label(Span::styled(
+      song_progress_label,
+      Style::default()
+        .fg(theme.playbar_text)
+        .add_modifier(Modifier::BOLD),
+    ));
+  f.render_widget(song_progress, chunks[2]);
 }
 
 pub fn draw_error_screen(f: &mut Frame, app: &App)
@@ -1079,9 +1460,12 @@ pub fn draw_error_screen(f: &mut Frame, app: &App)
     .block(
       Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
         .title(Span::styled(
           "Error",
-          Style::default().fg(app.user_config.theme.error_border),
+          Style::default()
+            .fg(app.user_config.theme.error_border)
+            .add_modifier(Modifier::BOLD),
         ))
         .border_style(Style::default().fg(app.user_config.theme.error_border)),
     );
@@ -1090,60 +1474,316 @@ pub fn draw_error_screen(f: &mut Frame, app: &App)
 
 fn draw_home(f: &mut Frame, app: &App, layout_chunk: Rect)
 {
+  let display_name = app
+    .user
+    .as_ref()
+    .and_then(|u| u.display_name.clone())
+    .unwrap_or_else(|| "there".to_owned());
+
   let chunks = Layout::default()
     .direction(Direction::Vertical)
-    .constraints([Constraint::Length(7), Constraint::Length(93)].as_ref())
-    .margin(2)
+    .constraints(
+      [
+        Constraint::Length(3),
+        Constraint::Percentage(36),
+        Constraint::Percentage(32),
+        Constraint::Percentage(32),
+      ]
+      .as_ref(),
+    )
     .split(layout_chunk);
 
-  let current_route = app.get_current_route();
-  let highlight_state = (
-    current_route.active_block == ActiveBlock::Home,
-    current_route.hovered_block == ActiveBlock::Home,
+  // Greeting / hint strip
+  let hint = Paragraph::new(Text::from(vec![
+    Line::from(Span::styled(
+      format!("Hello, {} — what do you want to listen to today?", display_name),
+      Style::default()
+        .fg(app.user_config.theme.banner)
+        .add_modifier(Modifier::BOLD),
+    )),
+    Line::from(Span::styled(
+      "j/k move between & within · Enter opens · q goes back · ? help",
+      Style::default().fg(app.user_config.theme.inactive),
+    )),
+  ]))
+  .style(Style::default().fg(app.user_config.theme.text))
+  .block(
+    Block::default()
+      .borders(Borders::ALL)
+      .border_type(BorderType::Rounded)
+      .border_style(Style::default().fg(app.user_config.theme.banner)),
+  );
+  f.render_widget(hint, chunks[0]);
+
+  if matches!(app.home_mode, HomeMode::Podcast) {
+    draw_home_podcast_sections(f, app, chunks.clone());
+    return;
+  }
+
+  // ── Made For You (top) — two-line rows: bold title + dim preview subtitle ──
+  let made_highlight_state = get_home_highlight_state(app, HomeBlock::MadeForYou);
+  let made_theme = app.user_config.theme;
+  let pairs = made_for_you_pairs(app);
+
+  let made_list_items: Vec<ListItem> = pairs
+    .iter()
+    .map(|(title, subtitle)| {
+      let title_line = Line::from(Span::styled(
+        title.clone(),
+        Style::default()
+          .fg(made_theme.text)
+          .add_modifier(Modifier::BOLD),
+      ));
+      let subtitle_line = Line::from(Span::styled(
+        subtitle.clone(),
+        Style::default().fg(made_theme.inactive),
+      ));
+      ListItem::new(Text::from(vec![title_line, subtitle_line]))
+    })
+    .collect();
+
+  let mut made_state = ListState::default();
+  if !pairs.is_empty() {
+    made_state.select(Some(
+      app.home_made_for_you_index.min(pairs.len() - 1),
+    ));
+  }
+
+  let made_list = List::new(made_list_items)
+    .block(
+      Block::default()
+        .title(Span::styled(
+          "Your Top Artists",
+          get_color(made_highlight_state, made_theme),
+        ))
+        .borders(Borders::ALL)
+        .border_type(get_border_type(made_highlight_state))
+        .border_style(get_color(made_highlight_state, made_theme)),
+    )
+    .style(Style::default().fg(made_theme.text))
+    .highlight_style(get_row_highlight_style(made_highlight_state, made_theme));
+  f.render_stateful_widget(made_list, chunks[1], &mut made_state);
+
+  // ── Recommended stations (middle) ── unique artists drawn from recently played
+  let recommended_items: Vec<String> = recommended_station_names(app);
+
+  draw_selectable_list(
+    f,
+    app,
+    chunks[2],
+    "Recommended stations",
+    &recommended_items,
+    get_home_highlight_state(app, HomeBlock::RecommendedStations),
+    Some(app.home_recommended_index),
   );
 
-  let welcome = Block::default()
-    .title(Span::styled(
-      "Welcome!",
-      get_color(highlight_state, app.user_config.theme),
-    ))
-    .borders(Borders::ALL)
-    .border_style(get_color(highlight_state, app.user_config.theme));
-  f.render_widget(welcome, layout_chunk);
+  // ── Jump back in (bottom) ──
+  let recently_items: Vec<String> = app
+    .recently_played
+    .result
+    .as_ref()
+    .map(|page| {
+      page
+        .items
+        .iter()
+        .map(|item| {
+          format!(
+            "{} — {}",
+            item.track.name,
+            create_artist_string(&item.track.artists)
+          )
+        })
+        .collect()
+    })
+    .unwrap_or_else(|| vec!["Loading recently played…".to_owned()]);
 
-  let changelog = include_str!("../../CHANGELOG.md").to_string();
+  draw_selectable_list(
+    f,
+    app,
+    chunks[3],
+    "Jump back in",
+    &recently_items,
+    get_home_highlight_state(app, HomeBlock::JumpBackIn),
+    Some(app.home_jump_back_index),
+  );
+}
 
-  // If debug mode show the "Unreleased" header. Otherwise it is a release so there should be no
-  // unreleased features
-  let clean_changelog = if cfg!(debug_assertions) {
-    changelog
-  } else {
-    changelog.replace("\n## [Unreleased]\n", "")
+fn draw_home_podcast_sections(
+  f: &mut Frame,
+  app: &App,
+  chunks: std::rc::Rc<[Rect]>,
+) {
+  // ── Your Shows (top) ──
+  let your_shows_rows: Vec<String> = match app.library.saved_shows.get_results(None) {
+    Some(page) if !page.items.is_empty() => page
+      .items
+      .iter()
+      .map(|s| format!("{}  ·  {}", s.show.name, s.show.publisher))
+      .collect(),
+    _ => vec!["No saved podcasts — open Library → Podcasts and save some".to_owned()],
   };
-
-  // Banner text with correct styling
-  let top_text = Text::from(BANNER).patch_style(Style::default().fg(app.user_config.theme.banner));
-
-  let bottom_text_raw = format!(
-    "{}{}",
-    "\nPlease report any bugs or missing features to https://github.com/Rigellute/spotify-tui\n\n",
-    clean_changelog
+  draw_selectable_list(
+    f,
+    app,
+    chunks[1],
+    "Your Shows",
+    &your_shows_rows,
+    get_home_highlight_state(app, HomeBlock::YourShows),
+    Some(app.home_your_shows_index),
   );
-  let bottom_text = Text::from(bottom_text_raw.as_str());
 
-  // Contains the banner
-  let top_text = Paragraph::new(top_text)
-    .style(Style::default().fg(app.user_config.theme.text))
-    .block(Block::default());
-  f.render_widget(top_text, chunks[0]);
+  // ── Continue listening (middle) ──
+  let continue_episodes = continue_listening_for_render(app);
+  let continue_rows: Vec<String> = if continue_episodes.is_empty() {
+    vec!["Listen to an episode to see resume points here".to_owned()]
+  } else {
+    continue_episodes
+      .iter()
+      .map(|(show_name, episode)| {
+        let remaining_ms = episode.duration.num_milliseconds().saturating_sub(
+          episode
+            .resume_point
+            .as_ref()
+            .map(|rp| rp.resume_position.num_milliseconds())
+            .unwrap_or(0),
+        ) as u128;
+        let remaining = format!(
+          "{}:{:02} left",
+          remaining_ms / 60_000,
+          (remaining_ms % 60_000) / 1000
+        );
+        format!("{}  ·  {}  ·  {}", episode.name, show_name, remaining)
+      })
+      .collect()
+  };
+  draw_selectable_list(
+    f,
+    app,
+    chunks[2],
+    "Continue listening",
+    &continue_rows,
+    get_home_highlight_state(app, HomeBlock::ContinueListening),
+    Some(app.home_continue_listening_index),
+  );
 
-  // CHANGELOG
-  let bottom_text = Paragraph::new(bottom_text)
-    .style(Style::default().fg(app.user_config.theme.text))
-    .block(Block::default())
-    .wrap(Wrap { trim: false })
-    .scroll((app.home_scroll, 0));
-  f.render_widget(bottom_text, chunks[1]);
+  // ── Episodes for you (bottom) ──
+  let efy_episodes = episodes_for_you_for_render(app);
+  let episodes_for_you_rows: Vec<String> = if efy_episodes.is_empty() {
+    vec!["No recent episodes — open Library → Podcasts to follow some shows".to_owned()]
+  } else {
+    efy_episodes
+      .iter()
+      .map(|(show_name, episode)| {
+        format!(
+          "{}  ·  {}  ·  {}",
+          episode.name, show_name, episode.release_date
+        )
+      })
+      .collect()
+  };
+  draw_selectable_list(
+    f,
+    app,
+    chunks[3],
+    "Episodes for you",
+    &episodes_for_you_rows,
+    get_home_highlight_state(app, HomeBlock::EpisodesForYou),
+    Some(app.home_episodes_for_you_index),
+  );
+}
+
+fn continue_listening_for_render(
+  app: &App,
+) -> Vec<(String, rspotify::model::SimplifiedEpisode)> {
+  let mut out = Vec::new();
+  if let Some(saved_page) = app.library.saved_shows.get_results(None) {
+    for saved in &saved_page.items {
+      let show_id = saved.show.id.id().to_string();
+      if let Some(episodes) = app.podcast_episodes_per_show.get(&show_id) {
+        for episode in episodes {
+          if let Some(rp) = &episode.resume_point {
+            if rp.resume_position.num_milliseconds() > 0 && !rp.fully_played {
+              out.push((saved.show.name.clone(), episode.clone()));
+            }
+          }
+        }
+      }
+    }
+  }
+  out.sort_by(|a, b| b.1.release_date.cmp(&a.1.release_date));
+  out.truncate(10);
+  out
+}
+
+fn episodes_for_you_for_render(
+  app: &App,
+) -> Vec<(String, rspotify::model::SimplifiedEpisode)> {
+  let mut out = Vec::new();
+  if let Some(saved_page) = app.library.saved_shows.get_results(None) {
+    for saved in &saved_page.items {
+      let show_id = saved.show.id.id().to_string();
+      if let Some(episodes) = app.podcast_episodes_per_show.get(&show_id) {
+        if let Some(first) = episodes.first() {
+          out.push((saved.show.name.clone(), first.clone()));
+        }
+      }
+    }
+  }
+  out.sort_by(|a, b| b.1.release_date.cmp(&a.1.release_date));
+  out.truncate(10);
+  out
+}
+
+fn made_for_you_pairs(app: &App) -> Vec<(String, String)> {
+  // Section repurposed: shows the user's TOP ARTISTS (from
+  // current_user_top_artists). Replaces the broken "Made For You" mix
+  // attempt — the public Spotify Web API doesn't expose personalised
+  // Daily Mixes for accounts that haven't auto-saved them.
+  if app.top_artists.is_empty() {
+    return vec![("Loading your top artists…".to_owned(), String::new())];
+  }
+  app
+    .top_artists
+    .iter()
+    .map(|artist| {
+      let genres = if artist.genres.is_empty() {
+        format!("{} followers", artist.followers.total)
+      } else {
+        artist.genres.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+      };
+      (artist.name.clone(), genres)
+    })
+    .collect()
+}
+
+fn recommended_station_names(app: &App) -> Vec<String> {
+  match app.recently_played.result.as_ref() {
+    Some(page) => {
+      let mut seen: Vec<String> = Vec::new();
+      for item in &page.items {
+        for artist in &item.track.artists {
+          if !seen.iter().any(|n| n == &artist.name) {
+            seen.push(artist.name.clone());
+          }
+          if seen.len() >= 12 {
+            break;
+          }
+        }
+        if seen.len() >= 12 {
+          break;
+        }
+      }
+      if seen.is_empty() {
+        vec!["Listen to a few tracks to see stations…".to_owned()]
+      } else {
+        seen
+          .into_iter()
+          .map(|name| format!("{} Radio  ·  songs based on this artist", name))
+          .collect()
+      }
+    }
+    None => vec!["Loading…".to_owned()],
+  }
 }
 
 fn draw_artist_albums(f: &mut Frame, app: &App, layout_chunk: Rect)
@@ -1300,15 +1940,19 @@ pub fn draw_device_list(f: &mut Frame, app: &App)
       Block::default()
         .title(Span::styled(
           "Devices",
-          Style::default().fg(app.user_config.theme.active),
+          Style::default()
+            .fg(app.user_config.theme.active)
+            .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.user_config.theme.inactive)),
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(app.user_config.theme.active)),
     )
     .style(Style::default().fg(app.user_config.theme.text))
     .highlight_style(
       Style::default()
-        .fg(app.user_config.theme.active)
+        .bg(app.user_config.theme.selected)
+        .fg(app.user_config.theme.playbar_background)
         .add_modifier(Modifier::BOLD),
     );
   f.render_stateful_widget(list, chunks[1], &mut state);
@@ -1608,7 +2252,6 @@ fn draw_selectable_list<S>(
     .map(|i| ListItem::new(Span::raw(i.as_ref())))
     .collect();
 
-  //TODO
   let list = List::new(lst_items)
     .block(
       Block::default()
@@ -1617,12 +2260,14 @@ fn draw_selectable_list<S>(
           get_color(highlight_state, app.user_config.theme),
         ))
         .borders(Borders::ALL)
+        .border_type(get_border_type(highlight_state))
         .border_style(get_color(highlight_state, app.user_config.theme)),
     )
     .style(Style::default().fg(app.user_config.theme.text))
-    .highlight_style(
-      get_color(highlight_state, app.user_config.theme).add_modifier(Modifier::BOLD),
-    );
+    .highlight_style(get_row_highlight_style(
+      highlight_state,
+      app.user_config.theme,
+    ));
   f.render_stateful_widget(list, layout_chunk, &mut state);
 }
 
@@ -1643,7 +2288,8 @@ fn draw_dialog(f: &mut Frame, app: &App)
 
       let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.user_config.theme.inactive));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(app.user_config.theme.hovered));
 
       f.render_widget(block, rect);
 
@@ -1711,8 +2357,7 @@ fn draw_table(
   highlight_state: (bool, bool),
 )
 {
-  let selected_style =
-    get_color(highlight_state, app.user_config.theme).add_modifier(Modifier::BOLD);
+  let selected_style = get_row_highlight_style(highlight_state, app.user_config.theme);
 
   let track_playing_index = app.current_playback_context.to_owned().and_then(|ctx| {
     ctx.item.and_then(|item| match item {
@@ -1809,6 +2454,7 @@ fn draw_table(
     .block(
       Block::default()
         .borders(Borders::ALL)
+        .border_type(get_border_type(highlight_state))
         .style(Style::default().fg(app.user_config.theme.text))
         .title(Span::styled(
           title,

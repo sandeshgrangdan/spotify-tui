@@ -51,23 +51,26 @@ pub struct Theme {
 
 impl Default for Theme {
   fn default() -> Self {
+    // openapi-tui-inspired palette: bright lime-green focused accent on a
+    // near-black base, cyan headers, soft yellow hover, neutral gray dim.
+    // The green accent doubles as the Spotify-brand color.
     Theme {
-      analysis_bar: Color::LightCyan,
-      analysis_bar_text: Color::Reset,
-      active: Color::Cyan,
-      banner: Color::LightCyan,
-      error_border: Color::Red,
-      error_text: Color::LightRed,
-      hint: Color::Yellow,
-      hovered: Color::Magenta,
-      inactive: Color::Gray,
-      playbar_background: Color::Black,
-      playbar_progress: Color::LightCyan,
-      playbar_progress_text: Color::LightCyan,
-      playbar_text: Color::Reset,
-      selected: Color::LightCyan,
-      text: Color::Reset,
-      header: Color::Reset,
+      analysis_bar: Color::Rgb(120, 220, 100),       // lime — accent
+      analysis_bar_text: Color::Rgb(20, 20, 20),     // near-black
+      active: Color::Rgb(120, 220, 100),             // lime — focused accent
+      banner: Color::Rgb(120, 220, 100),             // lime
+      error_border: Color::Rgb(243, 139, 168),       // red
+      error_text: Color::Rgb(243, 139, 168),
+      hint: Color::Rgb(232, 209, 130),               // soft yellow
+      hovered: Color::Rgb(232, 209, 130),            // soft yellow — hovered (not focused)
+      inactive: Color::Rgb(102, 102, 102),           // dark gray — clearly muted
+      playbar_background: Color::Rgb(20, 20, 20),    // near-black
+      playbar_progress: Color::Rgb(120, 220, 100),   // lime
+      playbar_progress_text: Color::Rgb(20, 20, 20), // near-black on lime
+      playbar_text: Color::Rgb(220, 220, 220),       // near-white
+      selected: Color::Rgb(120, 220, 100),           // lime — focused list highlight
+      text: Color::Rgb(220, 220, 220),               // near-white
+      header: Color::Rgb(137, 220, 235),             // sky cyan — table headers
     }
   }
 }
@@ -156,6 +159,9 @@ pub struct KeyBindingsString {
   jump_to_artist_album: Option<String>,
   jump_to_context: Option<String>,
   manage_devices: Option<String>,
+  manage_queue: Option<String>,
+  toggle_lyrics: Option<String>,
+  toggle_home_mode: Option<String>,
   decrease_volume: Option<String>,
   increase_volume: Option<String>,
   toggle_playback: Option<String>,
@@ -186,6 +192,9 @@ pub struct KeyBindings {
   pub jump_to_artist_album: Key,
   pub jump_to_context: Key,
   pub manage_devices: Key,
+  pub manage_queue: Key,
+  pub toggle_lyrics: Key,
+  pub toggle_home_mode: Key,
   pub decrease_volume: Key,
   pub increase_volume: Key,
   pub toggle_playback: Key,
@@ -268,6 +277,9 @@ impl UserConfig {
         jump_to_artist_album: Key::Char('A'),
         jump_to_context: Key::Char('o'),
         manage_devices: Key::Char('d'),
+        manage_queue: Key::Char('Q'),
+        toggle_lyrics: Key::Char('y'),
+        toggle_home_mode: Key::Char('P'),
         decrease_volume: Key::Char('-'),
         increase_volume: Key::Char('+'),
         toggle_playback: Key::Char(' '),
@@ -351,6 +363,9 @@ impl UserConfig {
     to_keys!(jump_to_artist_album);
     to_keys!(jump_to_context);
     to_keys!(manage_devices);
+    to_keys!(manage_queue);
+    to_keys!(toggle_lyrics);
+    to_keys!(toggle_home_mode);
     to_keys!(decrease_volume);
     to_keys!(increase_volume);
     to_keys!(toggle_playback);

@@ -6,7 +6,7 @@ use rspotify::model::{
   album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
   artist::FullArtist,
   audio::AudioAnalysis,
-  context::CurrentPlaybackContext,
+  context::{CurrentPlaybackContext, CurrentUserQueue},
   device::DevicePayload,
   page::{CursorBasedPage, Page},
   playing::PlayHistory,
@@ -19,7 +19,7 @@ use rspotify::model::{
 use std::sync::mpsc::Sender;
 use std::{
   cmp::{max, min},
-  collections::HashSet,
+  collections::{HashMap, HashSet},
   time::{Instant, SystemTime},
 };
 use ratatui::layout::Rect;
@@ -105,6 +105,22 @@ pub enum ArtistBlock {
   Empty,
 }
 
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum HomeMode {
+  Music,
+  Podcast,
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum HomeBlock {
+  MadeForYou,
+  RecommendedStations,
+  JumpBackIn,
+  YourShows,
+  ContinueListening,
+  EpisodesForYou,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DialogContext {
   PlaylistWindow,
@@ -125,7 +141,9 @@ pub enum ActiveBlock {
   Input,
   Library,
   MyPlaylists,
+  Devices,
   Podcasts,
+  Queue,
   EpisodeTable,
   RecentlyPlayed,
   SearchResultBlock,
@@ -153,6 +171,7 @@ pub enum RouteId {
   MadeForYou,
   Artists,
   Podcasts,
+  Queue,
   PodcastEpisodes,
   Recommendations,
   Dialog,
@@ -193,6 +212,14 @@ pub enum EpisodeTableContext {
 pub enum RecommendationsContext {
   Artist,
   Song,
+}
+
+#[derive(Clone, Debug)]
+pub struct Lyrics {
+  /// Synced lines parsed from LRC format. First field is milliseconds from track start.
+  pub synced: Vec<(u32, String)>,
+  /// Whole-track plain text. Used as a fallback when `synced` is empty.
+  pub plain: Option<String>,
 }
 
 pub struct SearchResult {
@@ -258,6 +285,19 @@ pub struct App {
   navigation_stack: Vec<Route>,
   pub audio_analysis: Option<AudioAnalysis>,
   pub home_scroll: u16,
+  pub home_selected_block: HomeBlock,
+  pub home_section_entered: bool,
+  pub home_jump_back_index: usize,
+  pub home_made_for_you_index: usize,
+  pub home_recommended_index: usize,
+  pub home_mode: HomeMode,
+  pub podcast_episodes_per_show: HashMap<String, Vec<SimplifiedEpisode>>,
+  pub home_your_shows_index: usize,
+  pub home_continue_listening_index: usize,
+  pub home_episodes_for_you_index: usize,
+  pub podcast_home_fetched: bool,
+  pub made_for_you_populated: bool,
+  pub top_artists: Vec<FullArtist>,
   pub user_config: UserConfig,
   pub artists: Vec<FullArtist>,
   pub artist: Option<Artist>,
@@ -265,6 +305,13 @@ pub struct App {
   pub saved_album_tracks_index: usize,
   pub api_error: String,
   pub current_playback_context: Option<CurrentPlaybackContext>,
+  pub queue: Option<CurrentUserQueue>,
+  pub queue_selected_index: usize,
+  pub lyrics_visible: bool,
+  pub lyrics: Option<Lyrics>,
+  pub lyrics_for_track_id: Option<String>,
+  pub lyrics_loading: bool,
+  pub made_for_you_previews: HashMap<String, String>,
   pub devices: Option<DevicePayload>,
   // Inputs:
   // input is the string for input;
@@ -342,6 +389,19 @@ impl Default for App {
       selected_album_simplified: None,
       selected_album_full: None,
       home_scroll: 0,
+      home_selected_block: HomeBlock::MadeForYou,
+      home_section_entered: false,
+      home_jump_back_index: 0,
+      home_made_for_you_index: 0,
+      home_recommended_index: 0,
+      home_mode: HomeMode::Music,
+      podcast_episodes_per_show: HashMap::new(),
+      home_your_shows_index: 0,
+      home_continue_listening_index: 0,
+      home_episodes_for_you_index: 0,
+      podcast_home_fetched: false,
+      made_for_you_populated: false,
+      top_artists: Vec::new(),
       library: Library {
         saved_tracks: ScrollableResultPages::new(),
         made_for_you_playlists: ScrollableResultPages::new(),
@@ -360,6 +420,13 @@ impl Default for App {
       small_search_limit: 4,
       api_error: String::new(),
       current_playback_context: None,
+      queue: None,
+      queue_selected_index: 0,
+      lyrics_visible: false,
+      lyrics: None,
+      lyrics_for_track_id: None,
+      lyrics_loading: false,
+      made_for_you_previews: HashMap::new(),
       devices: None,
       input: vec![],
       input_idx: 0,
@@ -511,6 +578,117 @@ impl App {
           self.song_progress_ms = elapsed;
         } else {
           self.song_progress_ms = duration_ms.into();
+        }
+      }
+    }
+    self.maybe_fetch_lyrics();
+
+    // Lazily populate Made For You once the user's playlists arrive.
+    // `made_for_you_populated` guard ensures we only run this once per session
+    // (a re-run after the user adds new playlists requires a relaunch — rare).
+    if !self.made_for_you_populated && self.playlists.is_some() {
+      self.made_for_you_populated = true;
+      self.populate_made_for_you_from_library();
+    }
+  }
+
+  pub fn maybe_fetch_lyrics(&mut self) {
+    if !self.lyrics_visible {
+      return;
+    }
+    if self.lyrics_loading {
+      return;
+    }
+    let context = match &self.current_playback_context {
+      Some(c) => c.clone(),
+      None => return,
+    };
+    let item = match context.item {
+      Some(i) => i,
+      None => return,
+    };
+    let (track_id, artist, track_name, album, duration_ms) = match item {
+      rspotify::model::PlayableItem::Track(track) => {
+        let id = match track.id.as_ref() {
+          Some(i) => i.id().to_string(),
+          None => return,
+        };
+        let artist = track
+          .artists
+          .first()
+          .map(|a| a.name.clone())
+          .unwrap_or_default();
+        let album = if track.album.name.is_empty() {
+          None
+        } else {
+          Some(track.album.name.clone())
+        };
+        (
+          id,
+          artist,
+          track.name.clone(),
+          album,
+          track.duration.num_milliseconds() as u32,
+        )
+      }
+      _ => return,
+    };
+    if self.lyrics_for_track_id.as_ref() == Some(&track_id) {
+      return;
+    }
+    // Clear the stale cache (from the previous track) so the panel shows
+    // the "fetching" placeholder during the network round-trip instead of
+    // rendering yesterday's lyrics over today's track.
+    self.lyrics = None;
+    self.lyrics_for_track_id = None;
+    self.lyrics_loading = true;
+    self.dispatch(IoEvent::FetchLyrics {
+      track_id,
+      artist,
+      track_name,
+      album,
+      duration_ms,
+    });
+  }
+
+  pub fn toggle_home_mode(&mut self) {
+    self.home_mode = match self.home_mode {
+      HomeMode::Music => HomeMode::Podcast,
+      HomeMode::Podcast => HomeMode::Music,
+    };
+    self.home_section_entered = false;
+    self.home_selected_block = match self.home_mode {
+      HomeMode::Music => HomeBlock::MadeForYou,
+      HomeMode::Podcast => HomeBlock::YourShows,
+    };
+
+    // When entering podcast mode, dispatch the data fetches the home will
+    // consume. The first-entry guard prevents a re-dispatch storm.
+    if matches!(self.home_mode, HomeMode::Podcast) {
+      if !self.podcast_home_fetched {
+        self.podcast_home_fetched = true;
+        if self.library.saved_shows.pages.is_empty() {
+          self.dispatch(IoEvent::GetCurrentUserSavedShows(None));
+        }
+      }
+      // Always (re-)check per-show cache and dispatch fetches for shows we
+      // don't yet have episodes for. This handles new shows added mid-session.
+      let country = self.get_user_country();
+      let show_ids: Vec<String> = self
+        .library
+        .saved_shows
+        .get_results(None)
+        .map(|page| {
+          page
+            .items
+            .iter()
+            .map(|s| s.show.id.id().to_string())
+            .collect()
+        })
+        .unwrap_or_default();
+      for show_id in show_ids {
+        if !self.podcast_episodes_per_show.contains_key(&show_id) {
+          self.dispatch(IoEvent::FetchShowEpisodesForCache(show_id, country));
         }
       }
     }
@@ -1116,21 +1294,57 @@ impl App {
   }
 
   pub fn get_made_for_you(&mut self) {
-    // TODO: replace searches when relevant endpoint is added
-    const DISCOVER_WEEKLY: &str = "Discover Weekly";
-    const RELEASE_RADAR: &str = "Release Radar";
-    const ON_REPEAT: &str = "On Repeat";
-    const REPEAT_REWIND: &str = "Repeat Rewind";
-    const DAILY_DRIVE: &str = "Daily Drive";
+    // The PUBLIC Spotify Web API does NOT expose a "Made For You" endpoint.
+    // Auto-generated playlists (Daily Mix 1-6, Discover Weekly, Release Radar)
+    // are personalised per user and not in the public search catalog — so the
+    // previous /search approach returned random public playlists with similar
+    // names, not the user's own mixes.
+    //
+    // The realistic public-API path: those playlists DO appear in the user's
+    // own playlist library (`current_user_playlists`) with `owner.id == "spotify"`
+    // when Spotify has auto-saved them. We filter `self.playlists` for those.
+    // If the user has un-followed them, they simply won't appear and the panel
+    // shows an honest empty message.
+    if !self.library.made_for_you_playlists.pages.is_empty() {
+      return;
+    }
+    self.populate_made_for_you_from_library();
+  }
 
-    if self.library.made_for_you_playlists.pages.is_empty() {
-      // We shouldn't be fetching all the results immediately - only load the data when the
-      // user selects the playlist
-      self.made_for_you_search_and_add(DISCOVER_WEEKLY);
-      self.made_for_you_search_and_add(RELEASE_RADAR);
-      self.made_for_you_search_and_add(ON_REPEAT);
-      self.made_for_you_search_and_add(REPEAT_REWIND);
-      self.made_for_you_search_and_add(DAILY_DRIVE);
+  fn populate_made_for_you_from_library(&mut self) {
+    let spotify_owned: Vec<SimplifiedPlaylist> = match &self.playlists {
+      Some(page) => page
+        .items
+        .iter()
+        .filter(|p| p.owner.id.id() == "spotify")
+        .cloned()
+        .collect(),
+      None => Vec::new(),
+    };
+
+    // Always push exactly one Page (even if empty) so the render can
+    // distinguish "still loading" (pages empty) from "loaded but no Spotify-
+    // curated playlists in your library" (page exists, items empty).
+    let n = spotify_owned.len() as u32;
+    self.library.made_for_you_playlists.pages.clear();
+    self.library.made_for_you_playlists.pages.push(Page {
+      items: spotify_owned.clone(),
+      href: String::new(),
+      limit: n.max(1),
+      next: None,
+      offset: 0,
+      previous: None,
+      total: n,
+    });
+
+    // Dispatch preview fetches for each. Silent-fail per playlist.
+    let user_country = self.get_user_country();
+    for playlist in &spotify_owned {
+      let playlist_id = playlist.id.id().to_string();
+      self.dispatch(IoEvent::FetchMadeForYouPreview(
+        playlist_id,
+        user_country,
+      ));
     }
   }
 

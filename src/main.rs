@@ -44,7 +44,7 @@ use ratatui::{
 };
 use user_config::{UserConfig, UserConfigPaths};
 
-const SCOPES: [&str; 14] = [
+const SCOPES: [&str; 15] = [
   "playlist-read-collaborative",
   "playlist-read-private",
   "playlist-modify-private",
@@ -59,6 +59,7 @@ const SCOPES: [&str; 14] = [
   "user-read-playback-position",
   "user-read-private",
   "user-read-recently-played",
+  "user-top-read",
 ];
 
 
@@ -390,6 +391,10 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
       app.dispatch(IoEvent::GetPlaylists);
       app.dispatch(IoEvent::GetUser);
       app.dispatch(IoEvent::GetCurrentPlayback);
+      app.dispatch(IoEvent::GetRecentlyPlayed);
+      app.dispatch(IoEvent::GetDevices);
+      app.dispatch(IoEvent::GetTopArtists);
+      app.get_made_for_you();
       app.help_docs_size = ui::help::get_help_docs(&app.user_config.keys).len() as u32;
 
       is_first_render = false;

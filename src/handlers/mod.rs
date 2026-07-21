@@ -5,6 +5,7 @@ mod artist;
 mod artists;
 mod basic_view;
 mod common_key_events;
+mod devices;
 mod dialog;
 mod empty;
 mod episode_table;
@@ -17,6 +18,7 @@ mod made_for_you;
 mod playbar;
 mod playlist;
 mod podcasts;
+mod queue;
 mod recently_played;
 mod search_results;
 mod select_device;
@@ -47,6 +49,20 @@ pub fn handle_app(key: Key, app: &mut App) {
     }
     _ if key == app.user_config.keys.manage_devices => {
       app.dispatch(IoEvent::GetDevices);
+    }
+    _ if key == app.user_config.keys.manage_queue => {
+      app.queue_selected_index = 0;
+      app.dispatch(IoEvent::GetQueue);
+      app.push_navigation_stack(RouteId::Queue, ActiveBlock::Queue);
+    }
+    _ if key == app.user_config.keys.toggle_lyrics => {
+      app.lyrics_visible = !app.lyrics_visible;
+      if app.lyrics_visible {
+        app.maybe_fetch_lyrics();
+      }
+    }
+    _ if key == app.user_config.keys.toggle_home_mode => {
+      app.toggle_home_mode();
     }
     _ if key == app.user_config.keys.decrease_volume => {
       app.decrease_volume();
@@ -145,6 +161,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Library => {
       library::handler(key, app);
     }
+    ActiveBlock::Devices => {
+      devices::handler(key, app);
+    }
     ActiveBlock::Empty => {
       empty::handler(key, app);
     }
@@ -159,6 +178,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     }
     ActiveBlock::Podcasts => {
       podcasts::handler(key, app);
+    }
+    ActiveBlock::Queue => {
+      queue::handler(key, app);
     }
     ActiveBlock::PlayBar => {
       playbar::handler(key, app);
@@ -190,6 +212,13 @@ fn handle_escape(app: &mut App) {
     }
     // These are global views that have no active/inactive distinction so do nothing
     ActiveBlock::SelectDevice | ActiveBlock::Analysis => {}
+    ActiveBlock::Home => {
+      if app.home_section_entered {
+        app.home_section_entered = false;
+      } else {
+        app.set_current_route_state(Some(ActiveBlock::Empty), None);
+      }
+    }
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);
     }

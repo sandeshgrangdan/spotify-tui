@@ -78,6 +78,21 @@ pub fn get_help_docs(key_bindings: &KeyBindings) -> Vec<Vec<String>> {
       String::from("General"),
     ],
     vec![
+      String::from("Open upcoming queue (use x to pop, Enter to skip-to-here)"),
+      key_bindings.manage_queue.to_string(),
+      String::from("General"),
+    ],
+    vec![
+      String::from("Toggle lyrics panel"),
+      key_bindings.toggle_lyrics.to_string(),
+      String::from("General"),
+    ],
+    vec![
+      String::from("Toggle home mode (Music / Podcasts)"),
+      key_bindings.toggle_home_mode.to_string(),
+      String::from("General"),
+    ],
+    vec![
       String::from("Copy url to currently playing album/show"),
       key_bindings.copy_album_url.to_string(),
       String::from("General"),
