@@ -42,7 +42,7 @@ pub fn draw(f: &mut Frame, app: &App)
     .border_style(gray);
 
   let empty_analysis_block = || {
-    Paragraph::new("No analysis available")
+    Paragraph::new("No analysis available (Spotify removed this API for third-party apps)")
       .block(analysis_block.clone())
       .style(Style::default().fg(app.user_config.theme.text))
   };

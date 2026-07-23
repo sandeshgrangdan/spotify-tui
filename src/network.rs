@@ -1377,8 +1377,12 @@ impl Network {
             let mut app = self.app.lock().await;
             app.audio_analysis = Some(analysis);
           }
-          Err(e) => {
-            self.handle_error(anyhow!(e)).await;
+          Err(_) => {
+            // Spotify removed /audio-analysis for third-party apps
+            // (Nov 2024). Show the in-view fallback instead of a scary
+            // error screen.
+            let mut app = self.app.lock().await;
+            app.audio_analysis = None;
           }
         }
       }
