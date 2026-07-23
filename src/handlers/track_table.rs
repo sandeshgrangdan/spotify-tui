@@ -66,7 +66,22 @@ pub fn handler(key: Key, app: &mut App) {
             app.get_current_user_saved_tracks_next();
           }
           TrackTableContext::AlbumSearch => {}
-          TrackTableContext::PlaylistSearch => {}
+          TrackTableContext::PlaylistSearch => {
+            if let (Some(playlists), Some(selected_index)) = (
+              &app.search_results.playlists,
+              app.search_results.selected_playlists_index,
+            ) {
+              if let Some(selected_playlist) = playlists.items.get(selected_index) {
+                if let Some(playlist_tracks) = &app.playlist_tracks {
+                  if app.playlist_offset + app.large_search_limit < playlist_tracks.total {
+                    app.playlist_offset += app.large_search_limit;
+                    let playlist_id = selected_playlist.id.id().to_string();
+                    app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
+                  }
+                }
+              }
+            }
+          }
           TrackTableContext::MadeForYou => {
             let (playlists, selected_playlist_index) =
               (&app.library.made_for_you_playlists, &app.made_for_you_index);
@@ -118,7 +133,20 @@ pub fn handler(key: Key, app: &mut App) {
             app.get_current_user_saved_tracks_previous();
           }
           TrackTableContext::AlbumSearch => {}
-          TrackTableContext::PlaylistSearch => {}
+          TrackTableContext::PlaylistSearch => {
+            if let (Some(playlists), Some(selected_index)) = (
+              &app.search_results.playlists,
+              app.search_results.selected_playlists_index,
+            ) {
+              if app.playlist_offset >= app.large_search_limit {
+                app.playlist_offset -= app.large_search_limit;
+              }
+              if let Some(selected_playlist) = playlists.items.get(selected_index) {
+                let playlist_id = selected_playlist.id.id().to_string();
+                app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
+              }
+            }
+          }
           TrackTableContext::MadeForYou => {
             let (playlists, selected_playlist_index) = (
               &app
