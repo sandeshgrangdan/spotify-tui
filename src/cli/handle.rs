@@ -7,7 +7,21 @@ use super::{
 };
 
 use anyhow::{anyhow, Result};
+use clap::parser::ValueSource;
 use clap::ArgMatches;
+
+/// The clap-4 migration lost per-flag format defaults; when the user didn't
+/// pass --format explicitly, pick a default suited to the requested action.
+fn effective_format(matches: &ArgMatches, per_flag_default: Option<&str>) -> String {
+  let user_supplied = matches.value_source("format") != Some(ValueSource::DefaultValue);
+  match (user_supplied, per_flag_default) {
+    (false, Some(d)) => d.to_string(),
+    _ => matches
+      .get_one::<String>("format")
+      .map(|s| s.to_string())
+      .unwrap_or_default(),
+  }
+}
 
 // Handle the different subcommands
 pub async fn handle_matches(
@@ -49,7 +63,16 @@ pub async fn handle_matches(
   // Evalute the subcommand
   let output = match cmd.as_str() {
     "playback" => {
-      let format = matches.get_one::<String>("format").map(|s| s.as_str()).unwrap();
+      let per_flag_default = if matches.contains_id("transfer") {
+        Some("%f %s %t - %a on %d")
+      } else if matches.contains_id("volume") {
+        Some("%v% %f %s %t - %a")
+      } else if matches.contains_id("seek") {
+        Some("%f %s %t - %a %r")
+      } else {
+        None
+      };
+      let format = effective_format(matches, per_flag_default);
 
       // Commands that are 'single'
       if matches.get_flag("share-track") {
@@ -87,12 +110,12 @@ pub async fn handle_matches(
       }
 
       // Print out the status if no errors were found
-      cli.get_status(format.to_string()).await
+      cli.get_status(format).await
     }
     "play" => {
       let queue = matches.get_flag("queue");
       let random = matches.get_flag("random");
-      let format = matches.get_one::<String>("format").map(|s| s.as_str()).unwrap();
+      let format = effective_format(matches, None);
 
       if let Some(uri) = matches.get_one::<String>("uri").map(|s| s.as_str()) {
         cli.play_uri(uri.to_string(), queue, random).await;
@@ -101,10 +124,17 @@ pub async fn handle_matches(
         cli.play(name.to_string(), category, queue, random).await?;
       }
 
-      cli.get_status(format.to_string()).await
+      cli.get_status(format).await
     }
     "list" => {
-      let format = matches.get_one::<String>("format").map(|s| s.as_str()).unwrap().to_string();
+      let per_flag_default = if matches.get_flag("devices") {
+        Some("%v% %d")
+      } else if matches.get_flag("playlists") {
+        Some("%p (%u)")
+      } else {
+        None
+      };
+      let format = effective_format(matches, per_flag_default);
 
       // Update the limits for the list and search functions
       // I think the small and big search limits are very confusing
@@ -117,7 +147,18 @@ pub async fn handle_matches(
       Ok(cli.list(category, &format).await)
     }
     "search" => {
-      let format = matches.get_one::<String>("format").map(|s| s.as_str()).unwrap().to_string();
+      let per_flag_default = if matches.get_flag("albums") {
+        Some("%b - %a (%u)")
+      } else if matches.get_flag("artists") {
+        Some("%a (%u)")
+      } else if matches.get_flag("playlists") {
+        Some("%p (%u)")
+      } else if matches.get_flag("shows") {
+        Some("%h (%u)")
+      } else {
+        None
+      };
+      let format = effective_format(matches, per_flag_default);
 
       // Update the limits for the list and search functions
       // I think the small and big search limits are very confusing

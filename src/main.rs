@@ -214,6 +214,19 @@ of the app. Beware that this comes at a CPU cost!",
 
   let mut network = Network::new(spotify, client_config, cloned_app);
 
+  // CLI subcommands run headless against the network layer and exit before
+  // the TUI starts.
+  if let Some((cmd, sub_matches)) = matches.subcommand() {
+    match cli::handle_matches(sub_matches, cmd.to_string(), network, user_config).await {
+      Ok(output) => println!("{}", output),
+      Err(e) => {
+        eprintln!("{}", e);
+        std::process::exit(1);
+      }
+    }
+    return Ok(());
+  }
+
   // Start the network event loop in a blocking thread so the async runtime
   // isn't blocked by the `mpsc::Receiver::recv` call.
   let _ = std::thread::spawn(move || {
