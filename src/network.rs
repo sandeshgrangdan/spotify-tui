@@ -46,6 +46,7 @@ pub enum IoEvent {
   ),
   GetCurrentUserSavedAlbums(Option<u32>),
   GetNewReleases(Option<u32>),
+  GetTopTracks,
   CurrentUserSavedAlbumsContains(Vec<String>),
   CurrentUserSavedAlbumDelete(String),
   CurrentUserSavedAlbumAdd(String),
@@ -204,6 +205,7 @@ impl Network {
         self.get_current_user_saved_albums(offset).await
       }
       IoEvent::GetNewReleases(offset) => self.get_new_releases(offset).await,
+      IoEvent::GetTopTracks => self.get_top_tracks().await,
       IoEvent::CurrentUserSavedAlbumsContains(album_ids) => {
         self.current_user_saved_albums_contains(album_ids).await
       }
@@ -1388,6 +1390,24 @@ impl Network {
       }
       Err(e) => {
         self.handle_error(anyhow!("Top artists fetch failed: {}", e)).await;
+      }
+    }
+  }
+
+  async fn get_top_tracks(&mut self) {
+    match self
+      .spotify
+      .current_user_top_tracks_manual(Some(TimeRange::MediumTerm), Some(50), Some(0))
+      .await
+    {
+      Ok(page) => {
+        let mut app = self.app.lock().await;
+        app.track_table.tracks = page.items;
+        app.track_table.selected_index = 0;
+        app.track_table.context = Some(TrackTableContext::TopTracks);
+      }
+      Err(e) => {
+        self.handle_error(anyhow!("Top tracks fetch failed: {}", e)).await;
       }
     }
   }

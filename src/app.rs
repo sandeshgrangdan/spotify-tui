@@ -196,6 +196,7 @@ pub enum TrackTableContext {
   SavedTracks,
   RecommendedTracks,
   MadeForYou,
+  TopTracks,
 }
 
 // Is it possible to compose enums?

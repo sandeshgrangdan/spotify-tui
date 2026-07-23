@@ -3,7 +3,8 @@ pub mod help;
 pub mod util;
 use super::app::{
   ActiveBlock, AlbumListContext, AlbumTableContext, App, ArtistBlock, EpisodeTableContext,
-  HomeBlock, HomeMode, RecommendationsContext, RouteId, SearchResultBlock, LIBRARY_OPTIONS,
+  HomeBlock, HomeMode, RecommendationsContext, RouteId, SearchResultBlock, TrackTableContext,
+  LIBRARY_OPTIONS,
 };
 use help::get_help_docs;
 use rspotify::model::ResumePoint;
@@ -1209,11 +1210,17 @@ pub fn draw_song_table(f: &mut Frame, app: &App, layout_chunk: Rect)
     })
     .collect::<Vec<TableItem>>();
 
+  let title = match app.track_table.context {
+    Some(TrackTableContext::TopTracks) => "Your Top Tracks",
+    Some(TrackTableContext::SavedTracks) => "Liked Songs",
+    _ => "Songs",
+  };
+
   draw_table(
     f,
     app,
     layout_chunk,
-    ("Songs", &header),
+    (title, &header),
     &items,
     app.track_table.selected_index,
     highlight_state,

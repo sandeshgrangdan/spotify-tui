@@ -61,6 +61,7 @@ pub fn handler(key: Key, app: &mut App) {
             };
           }
           TrackTableContext::RecommendedTracks => {}
+          TrackTableContext::TopTracks => {}
           TrackTableContext::SavedTracks => {
             app.get_current_user_saved_tracks_next();
           }
@@ -112,6 +113,7 @@ pub fn handler(key: Key, app: &mut App) {
             };
           }
           TrackTableContext::RecommendedTracks => {}
+          TrackTableContext::TopTracks => {}
           TrackTableContext::SavedTracks => {
             app.get_current_user_saved_tracks_previous();
           }
@@ -190,6 +192,18 @@ fn play_random_song(app: &mut App) {
         }
       }
       TrackTableContext::RecommendedTracks => {}
+      TrackTableContext::TopTracks => {
+        let track_uris: Vec<String> = app
+          .track_table
+          .tracks
+          .iter()
+          .map(|x| x.id.as_ref().map(|i| i.uri()).unwrap_or_default())
+          .collect();
+        if !track_uris.is_empty() {
+          let rand_idx = thread_rng().gen_range(0..track_uris.len());
+          app.dispatch(IoEvent::StartPlayback(None, Some(track_uris), Some(rand_idx)));
+        }
+      }
       TrackTableContext::SavedTracks => {
         if let Some(saved_tracks) = &app.library.saved_tracks.get_results(None) {
           let track_uris: Vec<String> = saved_tracks
@@ -296,6 +310,7 @@ fn jump_to_end(app: &mut App) {
         }
       }
       TrackTableContext::RecommendedTracks => {}
+      TrackTableContext::TopTracks => {}
       TrackTableContext::SavedTracks => {}
       TrackTableContext::AlbumSearch => {}
       TrackTableContext::PlaylistSearch => {}
@@ -336,6 +351,20 @@ fn on_enter(app: &mut App) {
           Some(
             app
               .recommended_tracks
+              .iter()
+              .map(|x| x.id.as_ref().map(|i| i.uri()).unwrap_or_default())
+              .collect::<Vec<String>>(),
+          ),
+          Some(app.track_table.selected_index),
+        ));
+      }
+      TrackTableContext::TopTracks => {
+        app.dispatch(IoEvent::StartPlayback(
+          None,
+          Some(
+            app
+              .track_table
+              .tracks
               .iter()
               .map(|x| x.id.as_ref().map(|i| i.uri()).unwrap_or_default())
               .collect::<Vec<String>>(),
@@ -431,6 +460,12 @@ fn on_queue(app: &mut App) {
           app.dispatch(IoEvent::AddItemToQueue(uri));
         }
       }
+      TrackTableContext::TopTracks => {
+        if let Some(track) = tracks.get(*selected_index) {
+          let uri = track.id.as_ref().map(|i| i.uri()).unwrap_or_default();
+          app.dispatch(IoEvent::AddItemToQueue(uri));
+        };
+      }
       TrackTableContext::SavedTracks => {
         if let Some(page) = app.library.saved_tracks.get_results(None) {
           if let Some(saved_track) = page.items.get(app.track_table.selected_index) {
@@ -477,6 +512,7 @@ fn jump_to_start(app: &mut App) {
         }
       }
       TrackTableContext::RecommendedTracks => {}
+      TrackTableContext::TopTracks => {}
       TrackTableContext::SavedTracks => {}
       TrackTableContext::AlbumSearch => {}
       TrackTableContext::PlaylistSearch => {}

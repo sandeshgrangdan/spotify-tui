@@ -1,5 +1,5 @@
 use super::{
-  super::app::{ActiveBlock, AlbumListContext, App, RouteId, LIBRARY_OPTIONS},
+  super::app::{ActiveBlock, AlbumListContext, App, RouteId, TrackTableContext, LIBRARY_OPTIONS},
   common_key_events,
 };
 use crate::event::Key;
@@ -67,6 +67,12 @@ pub fn handler(key: Key, app: &mut App) {
         app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
         app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
       }
+      // Top Tracks,
+      7 => {
+        app.track_table.context = Some(TrackTableContext::TopTracks);
+        app.dispatch(IoEvent::GetTopTracks);
+        app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+      }
       // New Releases,
       6 => {
         app.album_list_context = AlbumListContext::NewReleases;
@@ -98,6 +104,19 @@ mod tests {
     let route = app.get_current_route();
     assert_eq!(route.id, RouteId::AlbumList);
     assert_eq!(route.active_block, ActiveBlock::AlbumList);
+  }
+
+  #[test]
+  fn enter_on_top_tracks_opens_track_table_in_top_tracks_context() {
+    let mut app = App::default();
+    app.library.selected_index = 7; // "Top Tracks"
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.track_table.context, Some(TrackTableContext::TopTracks));
+    let route = app.get_current_route();
+    assert_eq!(route.id, RouteId::TrackTable);
+    assert_eq!(route.active_block, ActiveBlock::TrackTable);
   }
 
   #[test]
