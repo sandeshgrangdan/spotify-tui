@@ -284,7 +284,6 @@ pub struct App {
   pub instant_since_last_current_playback_poll: Instant,
   navigation_stack: Vec<Route>,
   pub audio_analysis: Option<AudioAnalysis>,
-  pub home_scroll: u16,
   pub home_selected_block: HomeBlock,
   pub home_section_entered: bool,
   pub home_jump_back_index: usize,
@@ -388,7 +387,6 @@ impl Default for App {
       size: Rect::default(),
       selected_album_simplified: None,
       selected_album_full: None,
-      home_scroll: 0,
       home_selected_block: HomeBlock::MadeForYou,
       home_section_entered: false,
       home_jump_back_index: 0,
@@ -1346,14 +1344,6 @@ impl App {
         user_country,
       ));
     }
-  }
-
-  fn made_for_you_search_and_add(&mut self, search_string: &str) {
-    let user_country = self.get_user_country();
-    self.dispatch(IoEvent::MadeForYouSearchAndAdd(
-      search_string.to_string(),
-      user_country,
-    ));
   }
 
   pub fn get_audio_analysis(&mut self) {

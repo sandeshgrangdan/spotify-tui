@@ -52,7 +52,6 @@ pub enum IoEvent {
   UserFollowArtists(Vec<String>),
   UserFollowPlaylist(String, String, Option<bool>),
   UserUnfollowPlaylist(String, String),
-  MadeForYouSearchAndAdd(String, Option<Country>),
   FetchMadeForYouPreview(String, Option<Country>),
   GetTopArtists,
   GetAudioAnalysis(String),
@@ -222,9 +221,6 @@ impl Network {
       }
       IoEvent::UserUnfollowPlaylist(user_id, playlist_id) => {
         self.user_unfollow_playlist(user_id, playlist_id).await
-      }
-      IoEvent::MadeForYouSearchAndAdd(search_string, country) => {
-        self.made_for_you_search_and_add(search_string, country).await
       }
       IoEvent::FetchMadeForYouPreview(playlist_id, country) => {
         self.fetch_made_for_you_preview(playlist_id, country).await
@@ -1335,82 +1331,6 @@ impl Network {
       }
       Err(e) => {
         self.handle_error(anyhow!("Invalid playlist ID: {:?}", e)).await;
-      }
-    }
-  }
-
-  async fn made_for_you_search_and_add(
-    &mut self,
-    search_string: String,
-    country: Option<Country>,
-  ) {
-    let market = country.map(Market::Country);
-    let playlist = match self
-      .spotify
-      .search(
-        &search_string,
-        SearchType::Playlist,
-        market,
-        None,
-        Some(1),
-        None,
-      )
-      .await
-    {
-      Ok(rspotify::model::SearchResult::Playlists(page)) => {
-        page.items.into_iter().next()
-      }
-      Ok(_) => None,
-      Err(e) => {
-        self.handle_error(anyhow!(e)).await;
-        None
-      }
-    };
-
-    let playlist = match playlist {
-      Some(p) => p,
-      None => return,
-    };
-
-    let playlist_id = playlist.id.id().to_string();
-
-    // Merge the playlist into the single shared Page<SimplifiedPlaylist>.
-    {
-      let mut app = self.app.lock().await;
-      let pages = &mut app.library.made_for_you_playlists.pages;
-      match pages.first_mut() {
-        Some(first) => {
-          first.items.push(playlist);
-          first.total = first.items.len() as u32;
-          first.limit = first.items.len() as u32;
-        }
-        None => {
-          pages.push(Page {
-            items: vec![playlist],
-            href: String::new(),
-            limit: 1,
-            next: None,
-            offset: 0,
-            previous: None,
-            total: 1,
-          });
-        }
-      }
-    }
-
-    // Fetch up to 10 tracks to derive an artist preview.
-    // Silent-fail on error — missing preview just shows the placeholder.
-    if let Ok(pid) = PlaylistId::from_id_or_uri(&playlist_id) {
-      if let Ok(track_page) = self
-        .spotify
-        .playlist_items_manual(pid.as_ref(), None, market.clone(), Some(10), Some(0))
-        .await
-      {
-        let preview = build_artists_preview(&track_page);
-        if !preview.is_empty() {
-          let mut app = self.app.lock().await;
-          app.made_for_you_previews.insert(playlist_id, preview);
-        }
       }
     }
   }

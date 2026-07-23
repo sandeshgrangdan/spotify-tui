@@ -44,25 +44,6 @@ use ratatui::{
 };
 use user_config::{UserConfig, UserConfigPaths};
 
-const SCOPES: [&str; 15] = [
-  "playlist-read-collaborative",
-  "playlist-read-private",
-  "playlist-modify-private",
-  "playlist-modify-public",
-  "user-follow-read",
-  "user-follow-modify",
-  "user-library-modify",
-  "user-library-read",
-  "user-modify-playback-state",
-  "user-read-currently-playing",
-  "user-read-playback-state",
-  "user-read-playback-position",
-  "user-read-private",
-  "user-read-recently-played",
-  "user-top-read",
-];
-
-
 fn close_application() -> Result<()> {
   disable_raw_mode()?;
   let mut stdout = io::stdout();
