@@ -1,5 +1,5 @@
 use super::{
-  super::app::{ActiveBlock, App, RouteId, LIBRARY_OPTIONS},
+  super::app::{ActiveBlock, AlbumListContext, App, RouteId, LIBRARY_OPTIONS},
   common_key_events,
 };
 use crate::event::Key;
@@ -52,6 +52,8 @@ pub fn handler(key: Key, app: &mut App) {
       }
       // Albums,
       3 => {
+        app.album_list_context = AlbumListContext::SavedAlbums;
+        app.album_list_index = 0;
         app.dispatch(IoEvent::GetCurrentUserSavedAlbums(None));
         app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
       }
@@ -65,9 +67,47 @@ pub fn handler(key: Key, app: &mut App) {
         app.dispatch(IoEvent::GetCurrentUserSavedShows(None));
         app.push_navigation_stack(RouteId::Podcasts, ActiveBlock::Podcasts);
       }
+      // New Releases,
+      6 => {
+        app.album_list_context = AlbumListContext::NewReleases;
+        app.album_list_index = 0;
+        if app.library.new_releases.get_results(None).is_none() {
+          app.dispatch(IoEvent::GetNewReleases(None));
+        }
+        app.push_navigation_stack(RouteId::AlbumList, ActiveBlock::AlbumList);
+      }
       // This is required because Rust can't tell if this pattern in exhaustive
       _ => {}
     },
     _ => (),
   };
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn enter_on_new_releases_opens_album_list_in_new_releases_context() {
+    let mut app = App::default();
+    app.library.selected_index = 6; // "New Releases"
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.album_list_context, AlbumListContext::NewReleases);
+    let route = app.get_current_route();
+    assert_eq!(route.id, RouteId::AlbumList);
+    assert_eq!(route.active_block, ActiveBlock::AlbumList);
+  }
+
+  #[test]
+  fn enter_on_albums_resets_saved_albums_context() {
+    let mut app = App::default();
+    app.album_list_context = AlbumListContext::NewReleases;
+    app.library.selected_index = 3; // "Albums"
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.album_list_context, AlbumListContext::SavedAlbums);
+  }
 }

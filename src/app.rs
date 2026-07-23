@@ -26,13 +26,15 @@ use ratatui::layout::Rect;
 
 use arboard::Clipboard;
 
-pub const LIBRARY_OPTIONS: [&str; 6] = [
+pub const LIBRARY_OPTIONS: [&str; 8] = [
   "Made For You",
   "Recently Played",
   "Liked Songs",
   "Albums",
   "Artists",
   "Podcasts",
+  "New Releases",
+  "Top Tracks",
 ];
 
 const DEFAULT_ROUTE: Route = Route {
@@ -85,6 +87,7 @@ pub struct Library {
   pub saved_shows: ScrollableResultPages<Page<Show>>,
   pub saved_artists: ScrollableResultPages<CursorBasedPage<FullArtist>>,
   pub show_episodes: ScrollableResultPages<Page<SimplifiedEpisode>>,
+  pub new_releases: ScrollableResultPages<Page<SimplifiedAlbum>>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -208,6 +211,13 @@ pub enum EpisodeTableContext {
   Full,
 }
 
+/// Which collection the album-list screen is currently showing.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AlbumListContext {
+  SavedAlbums,
+  NewReleases,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum RecommendationsContext {
   Artist,
@@ -301,6 +311,7 @@ pub struct App {
   pub artists: Vec<FullArtist>,
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
+  pub album_list_context: AlbumListContext,
   pub saved_album_tracks_index: usize,
   pub api_error: String,
   pub current_playback_context: Option<CurrentPlaybackContext>,
@@ -374,6 +385,7 @@ impl Default for App {
     App {
       audio_analysis: None,
       album_table_context: AlbumTableContext::Full,
+      album_list_context: AlbumListContext::SavedAlbums,
       album_list_index: 0,
       made_for_you_index: 0,
       artists_list_index: 0,
@@ -407,6 +419,7 @@ impl Default for App {
         saved_shows: ScrollableResultPages::new(),
         saved_artists: ScrollableResultPages::new(),
         show_episodes: ScrollableResultPages::new(),
+        new_releases: ScrollableResultPages::new(),
         selected_index: 0,
       },
       liked_song_ids_set: HashSet::new(),
@@ -1024,6 +1037,29 @@ impl App {
   pub fn get_current_user_saved_albums_previous(&mut self) {
     if self.library.saved_albums.index > 0 {
       self.library.saved_albums.index -= 1;
+    }
+  }
+
+  pub fn get_new_releases_next(&mut self) {
+    match self
+      .library
+      .new_releases
+      .get_results(Some(self.library.new_releases.index + 1))
+      .cloned()
+    {
+      Some(_) => self.library.new_releases.index += 1,
+      None => {
+        if let Some(page) = &self.library.new_releases.get_results(None) {
+          let offset = Some(page.offset + page.limit);
+          self.dispatch(IoEvent::GetNewReleases(offset));
+        }
+      }
+    }
+  }
+
+  pub fn get_new_releases_previous(&mut self) {
+    if self.library.new_releases.index > 0 {
+      self.library.new_releases.index -= 1;
     }
   }
 

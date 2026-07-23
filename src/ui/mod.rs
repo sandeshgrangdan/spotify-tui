@@ -2,8 +2,8 @@ pub mod audio_analysis;
 pub mod help;
 pub mod util;
 use super::app::{
-  ActiveBlock, AlbumTableContext, App, ArtistBlock, EpisodeTableContext, HomeBlock, HomeMode,
-  RecommendationsContext, RouteId, SearchResultBlock, LIBRARY_OPTIONS,
+  ActiveBlock, AlbumListContext, AlbumTableContext, App, ArtistBlock, EpisodeTableContext,
+  HomeBlock, HomeMode, RecommendationsContext, RouteId, SearchResultBlock, LIBRARY_OPTIONS,
 };
 use help::get_help_docs;
 use rspotify::model::ResumePoint;
@@ -1990,34 +1990,81 @@ pub fn draw_album_list(f: &mut Frame, app: &App, layout_chunk: Rect)
 
   let selected_song_index = app.album_list_index;
 
-  if let Some(saved_albums) = app.library.saved_albums.get_results(None) {
-    let items = saved_albums
-      .items
-      .iter()
-      .map(|album_page| TableItem {
-        id: album_page.album.id.id().to_string(),
-        format: vec![
-          format!(
-            "{}{}",
-            app.user_config.padded_liked_icon(),
-            &album_page.album.name
-          ),
-          create_artist_string(&album_page.album.artists),
-          album_page.album.release_date.to_owned(),
-        ],
-      })
-      .collect::<Vec<TableItem>>();
+  match app.album_list_context {
+    AlbumListContext::SavedAlbums => {
+      if let Some(saved_albums) = app.library.saved_albums.get_results(None) {
+        let items = saved_albums
+          .items
+          .iter()
+          .map(|album_page| TableItem {
+            id: album_page.album.id.id().to_string(),
+            format: vec![
+              format!(
+                "{}{}",
+                app.user_config.padded_liked_icon(),
+                &album_page.album.name
+              ),
+              create_artist_string(&album_page.album.artists),
+              album_page.album.release_date.to_owned(),
+            ],
+          })
+          .collect::<Vec<TableItem>>();
 
-    draw_table(
-      f,
-      app,
-      layout_chunk,
-      ("Saved Albums", &header),
-      &items,
-      selected_song_index,
-      highlight_state,
-    )
-  };
+        draw_table(
+          f,
+          app,
+          layout_chunk,
+          ("Saved Albums", &header),
+          &items,
+          selected_song_index,
+          highlight_state,
+        )
+      };
+    }
+    AlbumListContext::NewReleases => {
+      if let Some(page) = app.library.new_releases.get_results(None) {
+        let items = page
+          .items
+          .iter()
+          .map(|album| TableItem {
+            id: album
+              .id
+              .as_ref()
+              .map(|id| id.id().to_string())
+              .unwrap_or_default(),
+            format: vec![
+              format!(
+                "{}{}",
+                if album
+                  .id
+                  .as_ref()
+                  .map(|id| app.saved_album_ids_set.contains(&id.id().to_string()))
+                  .unwrap_or(false)
+                {
+                  app.user_config.padded_liked_icon()
+                } else {
+                  String::new()
+                },
+                &album.name
+              ),
+              create_artist_string(&album.artists),
+              album.release_date.clone().unwrap_or_default(),
+            ],
+          })
+          .collect::<Vec<TableItem>>();
+
+        draw_table(
+          f,
+          app,
+          layout_chunk,
+          ("New Releases (press w to save an album)", &header),
+          &items,
+          selected_song_index,
+          highlight_state,
+        )
+      };
+    }
+  }
 }
 
 pub fn draw_show_episodes(f: &mut Frame, app: &App, layout_chunk: Rect)

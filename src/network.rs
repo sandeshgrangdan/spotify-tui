@@ -45,6 +45,7 @@ pub enum IoEvent {
     Option<Country>,
   ),
   GetCurrentUserSavedAlbums(Option<u32>),
+  GetNewReleases(Option<u32>),
   CurrentUserSavedAlbumsContains(Vec<String>),
   CurrentUserSavedAlbumDelete(String),
   CurrentUserSavedAlbumAdd(String),
@@ -202,6 +203,7 @@ impl Network {
       IoEvent::GetCurrentUserSavedAlbums(offset) => {
         self.get_current_user_saved_albums(offset).await
       }
+      IoEvent::GetNewReleases(offset) => self.get_new_releases(offset).await,
       IoEvent::CurrentUserSavedAlbumsContains(album_ids) => {
         self.current_user_saved_albums_contains(album_ids).await
       }
@@ -1134,6 +1136,27 @@ impl Network {
       Ok(page) => {
         let mut app = self.app.lock().await;
         app.library.saved_albums.add_pages(page);
+      }
+      Err(e) => {
+        self.handle_error(anyhow!(e)).await;
+      }
+    }
+  }
+
+  async fn get_new_releases(&mut self, offset: Option<u32>) {
+    let offset = offset.unwrap_or(0);
+    let market = {
+      let app = self.app.lock().await;
+      app.get_user_country().map(Market::Country)
+    };
+    match self
+      .spotify
+      .new_releases_manual(market, Some(20), Some(offset))
+      .await
+    {
+      Ok(page) => {
+        let mut app = self.app.lock().await;
+        app.library.new_releases.add_pages(page);
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
