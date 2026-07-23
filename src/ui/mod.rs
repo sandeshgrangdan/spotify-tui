@@ -80,7 +80,7 @@ pub fn draw_help_menu(f: &mut Frame, app: &App)
     .direction(Direction::Vertical)
     .constraints([Constraint::Percentage(100)].as_ref())
     .margin(2)
-    .split(f.size());
+    .split(f.area());
 
   // Create a one-column table to avoid flickering due to non-determinism when
   // resolving constraints on widths of table columns.
@@ -270,7 +270,7 @@ pub fn draw_main_layout(f: &mut Frame, app: &App)
         .as_ref(),
       )
       .margin(margin)
-      .split(f.size());
+      .split(f.area());
 
     // Top bar (Music | Podcasts + greeting)
     draw_top_bar(f, app, parent_layout[0]);
@@ -292,7 +292,7 @@ pub fn draw_main_layout(f: &mut Frame, app: &App)
         .as_ref(),
       )
       .margin(margin)
-      .split(f.size());
+      .split(f.area());
 
     // Search input and help
     draw_input_and_help_box(f, app, parent_layout[0]);
@@ -1235,7 +1235,7 @@ pub fn draw_basic_view(f: &mut Frame, app: &App)
         ]
         .as_ref(),
       )
-      .split(f.size());
+      .split(f.area());
 
     draw_playbar(f, app, chunks[1]);
   }
@@ -1416,7 +1416,7 @@ pub fn draw_error_screen(f: &mut Frame, app: &App)
     .direction(Direction::Vertical)
     .constraints([Constraint::Percentage(100)].as_ref())
     .margin(5)
-    .split(f.size());
+    .split(f.area());
 
   let playing_text = vec![
     Line::from(vec![
@@ -1894,7 +1894,7 @@ pub fn draw_device_list(f: &mut Frame, app: &App)
     .direction(Direction::Vertical)
     .constraints([Constraint::Percentage(20), Constraint::Percentage(80)].as_ref())
     .margin(5)
-    .split(f.size());
+    .split(f.area());
 
   let device_instructions: Vec<Line> = vec![
         "To play tracks, please select a device. ",
@@ -2275,7 +2275,7 @@ fn draw_dialog(f: &mut Frame, app: &App)
 {
   if let ActiveBlock::Dialog(_) = app.get_current_route().active_block {
     if let Some(playlist) = app.dialog.as_ref() {
-      let bounds = f.size();
+      let bounds = f.area();
       // maybe do this better
       let width = std::cmp::min(bounds.width - 2, 45);
       let height = 8;

@@ -117,7 +117,7 @@ pub fn display_track_progress(progress: u128, track_duration: u32) -> String {
 // `percentage` param needs to be between 0 and 1
 pub fn get_percentage_width(width: u16, percentage: f32) -> u16 {
   let padding = 3;
-  let width = width - padding;
+  let width = width.saturating_sub(padding);
   (f32::from(width) * percentage) as u16
 }
 
@@ -150,6 +150,11 @@ mod tests {
     assert_eq!(millis_to_minutes(1900), "0:01");
     assert_eq!(millis_to_minutes(60 * 1000), "1:00");
     assert_eq!(millis_to_minutes(60 * 1500), "1:30");
+  }
+
+  #[test]
+  fn get_percentage_width_narrow_chunk_does_not_underflow() {
+    assert_eq!(get_percentage_width(2, 0.5), 0);
   }
 
   #[test]

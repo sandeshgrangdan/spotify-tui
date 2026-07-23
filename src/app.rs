@@ -1399,7 +1399,23 @@ impl App {
     }
     if self.help_menu_offset > self.help_docs_size {
       self.help_menu_offset = old_offset;
-      self.help_menu_page -= 1;
+      self.help_menu_page = self.help_menu_page.saturating_sub(1);
     }
+  }
+}
+
+#[cfg(test)]
+mod app_tests {
+  use super::App;
+
+  #[test]
+  fn help_menu_offset_does_not_underflow_on_page_zero() {
+    let mut app = App::default();
+    app.help_menu_max_lines = 10;
+    app.help_docs_size = 5;
+    app.help_menu_offset = 7; // stale from a pre-resize state
+    app.help_menu_page = 0;
+    app.calculate_help_menu_offset(); // must not panic
+    assert_eq!(app.help_menu_page, 0);
   }
 }

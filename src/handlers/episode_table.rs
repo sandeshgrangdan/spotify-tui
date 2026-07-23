@@ -60,8 +60,9 @@ pub fn handler(key: Key, app: &mut App) {
 
 fn jump_to_end(app: &mut App) {
   if let Some(episodes) = app.library.show_episodes.get_results(None) {
-    let last_idx = episodes.items.len() - 1;
-    app.episode_list_index = last_idx;
+    if let Some(last_idx) = episodes.items.len().checked_sub(1) {
+      app.episode_list_index = last_idx;
+    }
   }
 }
 

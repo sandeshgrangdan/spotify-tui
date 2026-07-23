@@ -75,7 +75,7 @@ pub fn on_middle_press_handler<T>(selection_data: &[T]) -> usize {
 }
 
 pub fn on_low_press_handler<T>(selection_data: &[T]) -> usize {
-  selection_data.len() - 1
+  selection_data.len().saturating_sub(1)
 }
 
 pub fn handle_right_event(app: &mut App) {
@@ -166,6 +166,12 @@ mod tests {
     let index = data.len() - 1;
     let next_index = on_down_press_handler(&data, Some(index));
     assert_eq!(next_index, 0);
+  }
+
+  #[test]
+  fn test_on_low_press_handler_empty_list() {
+    let data: Vec<&str> = vec![];
+    assert_eq!(on_low_press_handler(&data), 0);
   }
 
   #[test]
