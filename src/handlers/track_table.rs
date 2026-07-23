@@ -221,7 +221,7 @@ fn play_random_song(app: &mut App) {
             playlists
               .items
               .get(selected_playlist_index.to_owned())
-              .map(|p| p.tracks.total as usize)
+              .map(|p| p.items.total as usize)
           }
           _ => None,
         };
@@ -281,7 +281,7 @@ fn play_random_song(app: &mut App) {
           (Some(selected_playlist_index), Some(playlist_result)) => playlist_result
             .items
             .get(selected_playlist_index.to_owned())
-            .map(|p| p.tracks.total as usize),
+            .map(|p| p.items.total as usize),
           _ => None,
         };
         if let (Some(uri), Some(num)) = (context_uri, num_tracks) {
@@ -299,7 +299,7 @@ fn play_random_song(app: &mut App) {
           .get_results(Some(0))
           .and_then(|playlist| playlist.items.get(app.made_for_you_index))
         {
-          let num_tracks = playlist.tracks.total as usize;
+          let num_tracks = playlist.items.total as usize;
           let uri = Some(playlist.id.uri());
           app.dispatch(IoEvent::StartPlayback(
             uri,
@@ -342,7 +342,7 @@ fn jump_to_end(app: &mut App) {
           (&app.playlists, &app.selected_playlist_index)
         {
           if let Some(selected_playlist) = playlists.items.get(selected_playlist_index.to_owned()) {
-            let total_tracks = selected_playlist.tracks.total;
+            let total_tracks = selected_playlist.items.total;
 
             if app.large_search_limit < total_tracks {
               app.playlist_offset = total_tracks - (total_tracks % app.large_search_limit);

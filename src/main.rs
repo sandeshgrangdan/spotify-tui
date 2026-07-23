@@ -32,7 +32,7 @@ use network::{IoEvent, Network, get_spotify};
 use std::{
   cmp::{max, min},
   io::{self, stdout},
-  panic::{self, PanicInfo},
+  panic::{self, PanicHookInfo},
   path::PathBuf,
   sync::Arc,
   time::SystemTime,
@@ -51,7 +51,7 @@ fn close_application() -> Result<()> {
   Ok(())
 }
 
-fn panic_hook(info: &PanicInfo<'_>) {
+fn panic_hook(info: &PanicHookInfo<'_>) {
   if cfg!(debug_assertions) {
     let location = info.location().unwrap();
 

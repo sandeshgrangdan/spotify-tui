@@ -50,7 +50,6 @@ pub enum IoEvent {
   AddItemToPlaylist(String, String),
   RemoveItemFromPlaylist(String, String, u32),
   CreatePlaylist(String),
-  CurrentUserSavedAlbumsContains(Vec<String>),
   CurrentUserSavedAlbumDelete(String),
   CurrentUserSavedAlbumAdd(String),
   UserUnfollowArtists(Vec<String>),
@@ -66,13 +65,11 @@ pub enum IoEvent {
   GetRecentlyPlayed,
   GetFollowedArtists(Option<String>),
   SetArtistsToTable(Vec<FullArtist>),
-  UserArtistFollowCheck(Vec<String>),
   GetAlbum(String),
   TransferPlaybackToDevice(String),
   GetAlbumForTrack(String),
   CurrentUserSavedTracksContains(Vec<String>),
   GetCurrentUserSavedShows(Option<u32>),
-  CurrentUserSavedShowsContains(Vec<String>),
   CurrentUserSavedShowDelete(String),
   CurrentUserSavedShowAdd(String),
   GetShowEpisodes(Box<SimplifiedShow>),
@@ -218,9 +215,6 @@ impl Network {
           .await
       }
       IoEvent::CreatePlaylist(name) => self.create_playlist(name).await,
-      IoEvent::CurrentUserSavedAlbumsContains(album_ids) => {
-        self.current_user_saved_albums_contains(album_ids).await
-      }
       IoEvent::CurrentUserSavedAlbumDelete(album_id) => {
         self.current_user_saved_album_delete(album_id).await
       }
@@ -250,9 +244,6 @@ impl Network {
       }
       IoEvent::GetRecentlyPlayed => self.get_recently_played().await,
       IoEvent::GetFollowedArtists(after) => self.get_followed_artists(after).await,
-      IoEvent::UserArtistFollowCheck(artist_ids) => {
-        self.user_artist_check_follow(artist_ids).await
-      }
       IoEvent::GetAlbum(album_id) => self.get_album(album_id).await,
       IoEvent::TransferPlaybackToDevice(device_id) => {
         self.transfert_playback_to_device(device_id).await
@@ -263,9 +254,6 @@ impl Network {
       }
       IoEvent::GetCurrentUserSavedShows(offset) => {
         self.get_current_user_saved_shows(offset).await
-      }
-      IoEvent::CurrentUserSavedShowsContains(show_ids) => {
-        self.current_user_saved_shows_contains(show_ids).await
       }
       IoEvent::CurrentUserSavedShowDelete(show_id) => {
         self.current_user_saved_shows_delete(show_id).await
@@ -2028,7 +2016,7 @@ fn build_artists_preview(track_page: &Page<PlaylistItem>) -> String {
   let mut unique: Vec<String> = Vec::new();
   let mut more = false;
   'outer: for item in track_page.items.iter() {
-    if let Some(PlayableItem::Track(track)) = &item.track {
+    if let Some(PlayableItem::Track(track)) = &item.item {
       for artist in &track.artists {
         if unique.iter().any(|n| n == &artist.name) {
           continue;
@@ -2206,8 +2194,8 @@ mod artists_preview_tests {
       added_at: None,
       added_by: None,
       is_local: false,
-      track: Some(PlayableItem::Track(full_track)),
-      item: None,
+      track: None,
+      item: Some(PlayableItem::Track(full_track)),
     }
   }
 

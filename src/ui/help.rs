@@ -188,9 +188,29 @@ pub fn get_help_docs(key_bindings: &KeyBindings) -> Vec<Vec<String>> {
       String::from("Selected block"),
     ],
     vec![
-      String::from("Play recommendations for song/artist"),
+      String::from("Play a station (radio) for song/artist"),
       String::from("r"),
       String::from("Selected block"),
+    ],
+    vec![
+      String::from("Add selected track/episode to a playlist"),
+      key_bindings.add_to_playlist.to_string(),
+      String::from("Selected block"),
+    ],
+    vec![
+      String::from("Create a new playlist"),
+      key_bindings.create_playlist.to_string(),
+      String::from("Playlists"),
+    ],
+    vec![
+      String::from("Remove selected track from your own playlist"),
+      String::from("D"),
+      String::from("Playlist -> Songs"),
+    ],
+    vec![
+      String::from("Save (w) / unsave (D) selected song"),
+      String::from("w|D"),
+      String::from("Search result -> Songs"),
     ],
     vec![
       String::from("Play all tracks for artist"),

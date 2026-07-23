@@ -14,6 +14,18 @@
 
 A Spotify client for the terminal written in Rust.
 
+This fork is modernized for rspotify 0.16 / ratatui 0.29 and the post-2024 Spotify Web API, and adds:
+
+- **Home screen** with Music/Podcast modes: your top artists, recommended stations, jump back in, continue listening
+- **Synced lyrics** side panel (lrclib.net, LRC-synced with playback)
+- **Queue view** (`Q`): see what's next, pop items, skip to a queue entry
+- **Playlist management**: add tracks/episodes to a playlist (`t`), create playlists (`N` in the playlist pane), remove tracks from your own playlists (`D`)
+- **New Releases** and personal **Top Tracks** rows in the library
+- **Episode search** alongside songs/artists/albums/playlists/podcasts
+- **Client-side radio** (`r`): stations built from artist top tracks (Spotify removed the recommendations endpoint for third-party apps)
+- Liked/followed icons synced across search results, artist and album pages
+- A working CLI (`spt playback/play/list/search`) against the current API
+
 ![Demo](https://user-images.githubusercontent.com/12150276/75177190-91d4ab00-572d-11ea-80bd-c5e28c7b17ad.gif)
 
 The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.com/).
