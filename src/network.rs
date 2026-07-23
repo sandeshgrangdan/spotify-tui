@@ -593,13 +593,42 @@ impl Network {
         shows,
         ..
       }) => {
-        let mut app = self.app.lock().await;
-        app.search_results.tracks = tracks;
-        app.search_results.artists = artists;
-        app.search_results.albums = albums;
-        app.search_results.playlists = playlists;
-        app.search_results.shows = shows;
-        app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+        let track_ids: Vec<String> = tracks
+          .iter()
+          .flat_map(|page| page.items.iter())
+          .filter_map(|t| t.id.as_ref().map(|id| id.id().to_string()))
+          .collect();
+        let artist_ids: Vec<String> = artists
+          .iter()
+          .flat_map(|page| page.items.iter())
+          .map(|a| a.id.id().to_string())
+          .collect();
+        let album_ids: Vec<String> = albums
+          .iter()
+          .flat_map(|page| page.items.iter())
+          .filter_map(|a| a.id.as_ref().map(|id| id.id().to_string()))
+          .collect();
+        let show_ids: Vec<String> = shows
+          .iter()
+          .flat_map(|page| page.items.iter())
+          .map(|s| s.id.id().to_string())
+          .collect();
+
+        {
+          let mut app = self.app.lock().await;
+          app.search_results.tracks = tracks;
+          app.search_results.artists = artists;
+          app.search_results.albums = albums;
+          app.search_results.playlists = playlists;
+          app.search_results.shows = shows;
+          app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
+        }
+
+        // Sync liked/saved/followed icons for everything the results show.
+        self.current_user_saved_tracks_contains(track_ids).await;
+        self.user_artist_check_follow(artist_ids).await;
+        self.current_user_saved_albums_contains(album_ids).await;
+        self.current_user_saved_shows_contains(show_ids).await;
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -829,33 +858,52 @@ impl Network {
           self
             .spotify
             .artist_albums_manual(aid.as_ref(), [], market, Some(50), None);
-        let related_artists_fut = self.spotify.artist_related_artists(aid.as_ref());
 
-        let (top_tracks_result, albums_result, related_artists_result) =
-          try_join!(top_tracks_fut, albums_fut, related_artists_fut)
-            .map(|(a, b, c)| (Ok(a), Ok(b), Ok(c)))
-            .unwrap_or_else(|e| (Err(e), Err(rspotify::ClientError::InvalidToken), Err(rspotify::ClientError::InvalidToken)));
+        match try_join!(top_tracks_fut, albums_fut) {
+          Ok((top_tracks, albums)) => {
+            // Spotify removed /related-artists for third-party apps
+            // (Nov 2024); treat it as optional so the artist page still
+            // renders top tracks + albums when it fails.
+            let related_artists = self
+              .spotify
+              .artist_related_artists(aid.as_ref())
+              .await
+              .unwrap_or_default();
 
-        match (top_tracks_result, albums_result, related_artists_result) {
-          (Ok(top_tracks), Ok(albums), Ok(related_artists)) => {
-            let mut app = self.app.lock().await;
-            app.artist = Some(Artist {
-              artist_name: input_artist_name,
-              albums,
-              related_artists,
-              top_tracks,
-              selected_album_index: 0,
-              selected_related_artist_index: 0,
-              selected_top_track_index: 0,
-              artist_hovered_block: ArtistBlock::TopTracks,
-              artist_selected_block: ArtistBlock::Empty,
-            });
-            app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
+            let track_ids: Vec<String> = top_tracks
+              .iter()
+              .filter_map(|t| t.id.as_ref().map(|id| id.id().to_string()))
+              .collect();
+            let artist_ids: Vec<String> = std::iter::once(aid.id().to_string())
+              .chain(
+                related_artists
+                  .iter()
+                  .map(|a| a.id.id().to_string()),
+              )
+              .collect();
+
+            {
+              let mut app = self.app.lock().await;
+              app.artist = Some(Artist {
+                artist_name: input_artist_name,
+                albums,
+                related_artists,
+                top_tracks,
+                selected_album_index: 0,
+                selected_related_artist_index: 0,
+                selected_top_track_index: 0,
+                artist_hovered_block: ArtistBlock::TopTracks,
+                artist_selected_block: ArtistBlock::Empty,
+              });
+              app.push_navigation_stack(RouteId::Artist, ActiveBlock::ArtistBlock);
+            }
+
+            // Sync liked/followed icons for what the page shows.
+            self.current_user_saved_tracks_contains(track_ids).await;
+            self.user_artist_check_follow(artist_ids).await;
           }
-          _ => {
-            self
-              .handle_error(anyhow!("Failed to fetch artist data for {}", artist_id))
-              .await;
+          Err(e) => {
+            self.handle_error(anyhow!(e)).await;
           }
         }
       }
@@ -873,14 +921,22 @@ impl Network {
         .await
       {
         Ok(tracks) => {
-          let mut app = self.app.lock().await;
-          app.selected_album_simplified = Some(SelectedAlbum {
-            album: *album,
-            tracks,
-            selected_index: 0,
-          });
-          app.album_table_context = AlbumTableContext::Simplified;
-          app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+          let track_ids: Vec<String> = tracks
+            .items
+            .iter()
+            .filter_map(|t| t.id.as_ref().map(|id| id.id().to_string()))
+            .collect();
+          {
+            let mut app = self.app.lock().await;
+            app.selected_album_simplified = Some(SelectedAlbum {
+              album: *album,
+              tracks,
+              selected_index: 0,
+            });
+            app.album_table_context = AlbumTableContext::Simplified;
+            app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+          }
+          self.current_user_saved_tracks_contains(track_ids).await;
         }
         Err(e) => {
           self.handle_error(anyhow!(e)).await;
@@ -1422,13 +1478,22 @@ impl Network {
       Ok(aid) => {
         match self.spotify.album(aid.as_ref(), None).await {
           Ok(full_album) => {
-            let mut app = self.app.lock().await;
-            app.selected_album_full = Some(SelectedFullAlbum {
-              album: full_album,
-              selected_index: 0,
-            });
-            app.album_table_context = AlbumTableContext::Full;
-            app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+            let track_ids: Vec<String> = full_album
+              .tracks
+              .items
+              .iter()
+              .filter_map(|t| t.id.as_ref().map(|id| id.id().to_string()))
+              .collect();
+            {
+              let mut app = self.app.lock().await;
+              app.selected_album_full = Some(SelectedFullAlbum {
+                album: full_album,
+                selected_index: 0,
+              });
+              app.album_table_context = AlbumTableContext::Full;
+              app.push_navigation_stack(RouteId::AlbumTracks, ActiveBlock::AlbumTracks);
+            }
+            self.current_user_saved_tracks_contains(track_ids).await;
           }
           Err(e) => {
             self.handle_error(anyhow!(e)).await;
