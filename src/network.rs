@@ -8,7 +8,7 @@ use rspotify::{scopes, AuthCodeSpotify, Config, Credentials, OAuth};
 use rspotify::prelude::{BaseClient, Id, OAuthClient};
 use rspotify::model::{
   AdditionalType, AlbumId, ArtistId, Country, EpisodeId, FullArtist, FullTrack, Market, Offset,
-  Page, PlayableId, PlayableItem, PlaylistId, PlaylistItem, Recommendations, RepeatState,
+  Page, PlayableId, PlayableItem, PlaylistId, PlaylistItem, RepeatState,
   SearchMultipleResult, SearchType, ShowId, SimplifiedAlbum, SimplifiedShow, TimeRange, TrackId,
 };
 use std::{sync::Arc, time::{Duration, Instant, SystemTime}};
@@ -945,119 +945,91 @@ impl Network {
     }
   }
 
+  /// Client-side "radio": Spotify removed the /recommendations endpoint for
+  /// third-party apps (Nov 2024), so we synthesize a station from the top
+  /// tracks of the seed artists (the artists themselves, or the seed track's
+  /// artists).
   async fn get_recommendations_for_seed(
     &mut self,
     seed_artists: Option<Vec<String>>,
     seed_tracks: Option<Vec<String>>,
-    _first_track: Box<Option<FullTrack>>,
+    first_track: Box<Option<FullTrack>>,
     country: Option<Country>,
   ) {
-    let market = country.map(Market::Country);
+    const RADIO_MAX_SEED_ARTISTS: usize = 3;
 
-    let artist_ids: Option<Vec<ArtistId<'static>>> = seed_artists.as_ref().map(|ids| {
-      ids
-        .iter()
-        .filter_map(|id| ArtistId::from_id_or_uri(id).ok().map(|a| a.into_static()))
-        .collect()
-    });
-    let track_ids: Option<Vec<TrackId<'static>>> = seed_tracks.as_ref().map(|ids| {
-      ids
-        .iter()
-        .filter_map(|id| TrackId::from_id_or_uri(id).ok().map(|t| t.into_static()))
-        .collect()
-    });
-
-    let seed_string = if let Some(ref artists) = seed_artists {
-      artists.join(", ")
-    } else if let Some(ref tracks) = seed_tracks {
-      tracks.join(", ")
-    } else {
-      String::new()
+    // Resolve the seed track: passed directly, or fetched from the first
+    // seed-track id.
+    let seed_track: Option<FullTrack> = match *first_track {
+      Some(track) => Some(track),
+      None => match seed_tracks
+        .as_ref()
+        .and_then(|ids| ids.first())
+        .and_then(|id| TrackId::from_id_or_uri(id).ok())
+      {
+        Some(tid) => self
+          .spotify
+          .track(tid.as_ref(), country.map(Market::Country))
+          .await
+          .ok(),
+        None => None,
+      },
     };
 
-    match self
-      .spotify
-      .recommendations(
-        [],
-        artist_ids.map(|ids| ids.into_iter()),
-        None::<Vec<&str>>,
-        track_ids.map(|ids| ids.into_iter()),
-        market,
-        Some(20),
-      )
-      .await
-    {
-      Ok(recommendations) => {
-        if let Some(recommended_tracks) = self.extract_recommended_tracks(&recommendations).await {
-          let mut app = self.app.lock().await;
-          app.recommended_tracks = recommended_tracks;
-          app.recommendations_seed = seed_string;
-          app.recommendations_context =
-            Some(crate::app::RecommendationsContext::Song);
-          app.track_table.context = Some(TrackTableContext::RecommendedTracks);
-          app.track_table.tracks = app.recommended_tracks.clone();
-          app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
-        }
-      }
-      Err(e) => {
-        self.handle_error(anyhow!(e)).await;
+    // Seed artists: the explicit ones, else the seed track's artists.
+    let artist_ids: Vec<ArtistId<'static>> = match seed_artists {
+      Some(ids) => ids
+        .iter()
+        .filter_map(|id| ArtistId::from_id_or_uri(id).ok().map(|a| a.into_static()))
+        .collect(),
+      None => seed_track
+        .as_ref()
+        .map(|track| track.artists.iter().filter_map(|a| a.id.clone()).collect())
+        .unwrap_or_default(),
+    };
+
+    let mut per_artist: Vec<Vec<FullTrack>> = Vec::new();
+    for artist_id in artist_ids.into_iter().take(RADIO_MAX_SEED_ARTISTS) {
+      // Skip artists whose top tracks can't be fetched - a station from the
+      // remaining seeds is better than an error page.
+      if let Ok(tracks) = self
+        .spotify
+        .artist_top_tracks(artist_id.as_ref(), country.map(Market::Country))
+        .await
+      {
+        per_artist.push(tracks);
       }
     }
-  }
 
-  async fn extract_recommended_tracks(
-    &mut self,
-    recommendations: &Recommendations,
-  ) -> Option<Vec<FullTrack>> {
-    let track_ids: Vec<TrackId<'static>> = recommendations
-      .tracks
-      .iter()
-      .filter_map(|t| t.id.as_ref().map(|id| id.clone_static()))
-      .collect();
-
-    if track_ids.is_empty() {
-      return Some(vec![]);
+    let station = merge_radio_tracks(seed_track, per_artist);
+    if station.is_empty() {
+      self
+        .handle_error(anyhow!("Couldn't build a station for this seed"))
+        .await;
+      return;
     }
 
-    let mut full_tracks = Vec::new();
-    for track_id in track_ids {
-      if let Ok(track) = self.spotify.track(track_id.as_ref(), None).await {
-        full_tracks.push(track);
-      }
-    }
-    Some(full_tracks)
+    // recommendations_seed / recommendations_context are set by the caller
+    // (they know the display name); don't overwrite them here.
+    let mut app = self.app.lock().await;
+    app.recommended_tracks = station;
+    app.track_table.context = Some(TrackTableContext::RecommendedTracks);
+    app.track_table.tracks = app.recommended_tracks.clone();
+    app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
   }
 
   async fn get_recommendations_for_track_id(&mut self, id: String, country: Option<Country>) {
     match TrackId::from_id_or_uri(&id) {
       Ok(track_id) => {
-        let market = country.map(Market::Country);
-        let track_id_static = track_id.into_static();
         match self
           .spotify
-          .recommendations(
-            [],
-            None::<Vec<ArtistId<'_>>>,
-            None::<Vec<&str>>,
-            Some(vec![track_id_static.as_ref()]),
-            market,
-            Some(20),
-          )
+          .track(track_id.as_ref(), country.map(Market::Country))
           .await
         {
-          Ok(recommendations) => {
-            if let Some(recommended_tracks) =
-              self.extract_recommended_tracks(&recommendations).await
-            {
-              let mut app = self.app.lock().await;
-              app.recommended_tracks = recommended_tracks;
-              app.recommendations_seed = id.clone();
-              app.recommendations_context =
-                Some(crate::app::RecommendationsContext::Song);
-              app.track_table.context = Some(TrackTableContext::RecommendedTracks);
-              app.track_table.tracks = app.recommended_tracks.clone();
-              app.push_navigation_stack(RouteId::Recommendations, ActiveBlock::TrackTable);
-            }
+          Ok(track) => {
+            self
+              .get_recommendations_for_seed(None, None, Box::new(Some(track)), country)
+              .await;
           }
           Err(e) => {
             self.handle_error(anyhow!(e)).await;
@@ -1745,6 +1717,48 @@ fn extract_lyrics_payload(
   }
 }
 
+/// Round-robin merge of per-artist top tracks into a single "radio" list.
+///
+/// The seed track (if any) always comes first; duplicates (by track id) and
+/// id-less tracks are dropped; the result is capped at 50 tracks.
+fn merge_radio_tracks(
+  seed: Option<FullTrack>,
+  per_artist: Vec<Vec<FullTrack>>,
+) -> Vec<FullTrack> {
+  const RADIO_MAX_TRACKS: usize = 50;
+  let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+  let mut out: Vec<FullTrack> = Vec::new();
+
+  if let Some(seed) = seed {
+    if let Some(id) = seed.id.as_ref() {
+      seen.insert(id.id().to_string());
+    }
+    out.push(seed);
+  }
+
+  let mut iters: Vec<std::vec::IntoIter<FullTrack>> =
+    per_artist.into_iter().map(|v| v.into_iter()).collect();
+  let mut exhausted = false;
+  'outer: while !exhausted {
+    exhausted = true;
+    for it in iters.iter_mut() {
+      if let Some(track) = it.next() {
+        exhausted = false;
+        if let Some(id) = track.id.as_ref() {
+          let key = id.id().to_string();
+          if seen.insert(key) {
+            out.push(track);
+            if out.len() >= RADIO_MAX_TRACKS {
+              break 'outer;
+            }
+          }
+        }
+      }
+    }
+  }
+  out
+}
+
 /// Convert raw track/episode URIs into typed `PlayableId`s, dropping any that
 /// parse as neither.
 fn parse_playable_ids(uri_list: &[String]) -> Vec<PlayableId<'static>> {
@@ -1880,6 +1894,103 @@ fn build_artists_preview(track_page: &Page<PlaylistItem>) -> String {
     format!("{} and more", joined)
   } else {
     joined
+  }
+}
+
+#[cfg(test)]
+mod radio_tests {
+  use super::merge_radio_tracks;
+  use chrono::TimeDelta;
+  use rspotify::model::{album::SimplifiedAlbum, track::FullTrack, TrackId};
+
+  fn make_track(id: Option<&str>, name: &str) -> FullTrack {
+    FullTrack {
+      album: SimplifiedAlbum {
+        album_group: None,
+        album_type: None,
+        artists: vec![],
+        available_markets: vec![],
+        external_urls: Default::default(),
+        href: None,
+        id: None,
+        images: vec![],
+        name: String::new(),
+        release_date: None,
+        release_date_precision: None,
+        restrictions: None,
+      },
+      artists: vec![],
+      available_markets: vec![],
+      disc_number: 1,
+      duration: TimeDelta::seconds(0),
+      explicit: false,
+      external_ids: Default::default(),
+      external_urls: Default::default(),
+      href: None,
+      id: id.map(|i| TrackId::from_id(i.to_string()).unwrap()),
+      is_local: false,
+      is_playable: None,
+      linked_from: None,
+      name: name.to_string(),
+      popularity: 0,
+      preview_url: None,
+      restrictions: None,
+      track_number: 0,
+      r#type: rspotify::model::Type::Track,
+    }
+  }
+
+  fn id(n: usize) -> String {
+    // 22-char base62-looking id, unique per n
+    format!("{:022}", n).replace(' ', "0")
+  }
+
+  #[test]
+  fn dedupes_across_artists() {
+    let a = vec![make_track(Some(&id(1)), "x"), make_track(Some(&id(2)), "y")];
+    let b = vec![make_track(Some(&id(1)), "x"), make_track(Some(&id(3)), "z")];
+    let out = merge_radio_tracks(None, vec![a, b]);
+    let names: Vec<_> = out.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["x", "y", "z"]);
+  }
+
+  #[test]
+  fn seed_comes_first_and_is_not_repeated() {
+    let seed = make_track(Some(&id(1)), "seed");
+    let a = vec![make_track(Some(&id(1)), "seed"), make_track(Some(&id(2)), "y")];
+    let out = merge_radio_tracks(Some(seed), vec![a]);
+    let names: Vec<_> = out.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["seed", "y"]);
+  }
+
+  #[test]
+  fn round_robin_interleaves_artists() {
+    let a = vec![make_track(Some(&id(1)), "a1"), make_track(Some(&id(2)), "a2")];
+    let b = vec![make_track(Some(&id(3)), "b1"), make_track(Some(&id(4)), "b2")];
+    let out = merge_radio_tracks(None, vec![a, b]);
+    let names: Vec<_> = out.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["a1", "b1", "a2", "b2"]);
+  }
+
+  #[test]
+  fn caps_at_fifty() {
+    let lists: Vec<Vec<FullTrack>> = (0..3)
+      .map(|artist| {
+        (0..30)
+          .map(|i| make_track(Some(&id(artist * 100 + i)), "t"))
+          .collect()
+      })
+      .collect();
+    let out = merge_radio_tracks(None, lists);
+    assert_eq!(out.len(), 50);
+  }
+
+  #[test]
+  fn drops_tracks_without_ids() {
+    let a = vec![make_track(None, "local"), make_track(Some(&id(1)), "y")];
+    let out = merge_radio_tracks(None, vec![a]);
+    let names: Vec<_> = out.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["y"]);
   }
 }
 

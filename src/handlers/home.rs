@@ -1,5 +1,5 @@
 use super::{
-  super::app::{App, HomeBlock, HomeMode, TrackTableContext},
+  super::app::{App, HomeBlock, HomeMode, RecommendationsContext},
   common_key_events,
 };
 use crate::event::Key;
@@ -139,9 +139,8 @@ fn handle_music_row_level(key: Key, app: &mut App) {
         }
       }
       HomeBlock::RecommendedStations => {
-        // Spotify's /recommendations endpoint is deprecated for newly-
-        // registered apps (Nov 2024). Instead, open the seed artist's page —
-        // the user can play a top track from there.
+        // Build a client-side station from the seed artist's top tracks
+        // (the /recommendations endpoint is gone for third-party apps).
         if let Some(page) = app.recently_played.result.clone() {
           let mut seen: Vec<(String, String)> = Vec::new();
           for item in &page.items {
@@ -164,7 +163,9 @@ fn handle_music_row_level(key: Key, app: &mut App) {
           }
           if let Some((id, name)) = seen.get(app.home_recommended_index) {
             if !id.is_empty() {
-              app.get_artist(id.clone(), name.clone());
+              app.recommendations_context = Some(RecommendationsContext::Artist);
+              app.recommendations_seed = name.clone();
+              app.get_recommendations_for_seed(Some(vec![id.clone()]), None, None);
             }
           }
         }
