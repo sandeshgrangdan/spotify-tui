@@ -179,6 +179,8 @@ pub struct KeyBindingsString {
   audio_analysis: Option<String>,
   basic_view: Option<String>,
   add_item_to_queue: Option<String>,
+  add_to_playlist: Option<String>,
+  create_playlist: Option<String>,
 }
 
 #[derive(Clone)]
@@ -212,6 +214,8 @@ pub struct KeyBindings {
   pub audio_analysis: Key,
   pub basic_view: Key,
   pub add_item_to_queue: Key,
+  pub add_to_playlist: Key,
+  pub create_playlist: Key,
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -297,6 +301,8 @@ impl UserConfig {
         audio_analysis: Key::Char('v'),
         basic_view: Key::Char('B'),
         add_item_to_queue: Key::Char('z'),
+        add_to_playlist: Key::Char('t'),
+        create_playlist: Key::Char('N'),
       },
       behavior: BehaviorConfig {
         seek_milliseconds: 5 * 1000,
@@ -383,6 +389,8 @@ impl UserConfig {
     to_keys!(audio_analysis);
     to_keys!(basic_view);
     to_keys!(add_item_to_queue);
+    to_keys!(add_to_playlist);
+    to_keys!(create_playlist);
 
     Ok(())
   }

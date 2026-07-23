@@ -18,13 +18,14 @@ mod made_for_you;
 mod playbar;
 mod playlist;
 mod podcasts;
+mod playlist_picker;
 mod queue;
 mod recently_played;
 mod search_results;
 mod select_device;
 mod track_table;
 
-use super::app::{ActiveBlock, App, ArtistBlock, RouteId, SearchResultBlock};
+use super::app::{ActiveBlock, App, ArtistBlock, InputMode, RouteId, SearchResultBlock};
 use crate::event::Key;
 use crate::network::IoEvent;
 use rspotify::model::{context::CurrentPlaybackContext, PlayableItem};
@@ -97,6 +98,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       app.repeat();
     }
     _ if key == app.user_config.keys.search => {
+      app.input_mode = InputMode::Search;
       app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
     }
     _ if key == app.user_config.keys.copy_song_url => {
@@ -191,6 +193,9 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::Dialog(_) => {
       dialog::handler(key, app);
     }
+    ActiveBlock::PlaylistPicker => {
+      playlist_picker::handler(key, app);
+    }
   }
 }
 
@@ -208,6 +213,10 @@ fn handle_escape(app: &mut App) {
       app.pop_navigation_stack();
     }
     ActiveBlock::Dialog(_) => {
+      app.pop_navigation_stack();
+    }
+    ActiveBlock::PlaylistPicker => {
+      app.playlist_picker_uri = None;
       app.pop_navigation_stack();
     }
     // These are global views that have no active/inactive distinction so do nothing

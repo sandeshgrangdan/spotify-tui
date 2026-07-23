@@ -2,7 +2,7 @@ use super::{
   super::app::{App, DialogContext, TrackTableContext},
   common_key_events,
 };
-use crate::app::{ActiveBlock, RouteId};
+use crate::app::{ActiveBlock, InputMode, RouteId};
 use crate::event::Key;
 use crate::network::IoEvent;
 use rspotify::prelude::Id;
@@ -72,6 +72,13 @@ pub fn handler(key: Key, app: &mut App) {
         }
       };
     }
+    _ if key == app.user_config.keys.create_playlist => {
+      app.input_mode = InputMode::NewPlaylist;
+      app.input = vec![];
+      app.input_idx = 0;
+      app.input_cursor_position = 0;
+      app.set_current_route_state(Some(ActiveBlock::Input), Some(ActiveBlock::Input));
+    }
     Key::Char('D') => {
       if let (Some(playlists), Some(selected_index)) = (&app.playlists, app.selected_playlist_index)
       {
@@ -91,6 +98,17 @@ pub fn handler(key: Key, app: &mut App) {
 
 #[cfg(test)]
 mod tests {
+  use super::*;
+
   #[test]
-  fn test() {}
+  fn create_playlist_key_opens_input_in_new_playlist_mode() {
+    let mut app = App::default();
+    app.input = "leftover".chars().collect();
+
+    handler(Key::Char('N'), &mut app);
+
+    assert_eq!(app.input_mode, InputMode::NewPlaylist);
+    assert!(app.input.is_empty());
+    assert_eq!(app.get_current_route().active_block, ActiveBlock::Input);
+  }
 }

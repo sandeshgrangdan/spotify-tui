@@ -1,6 +1,6 @@
 extern crate unicode_width;
 
-use super::super::app::{ActiveBlock, App, RouteId};
+use super::super::app::{ActiveBlock, App, InputMode, RouteId};
 use crate::event::Key;
 use crate::network::IoEvent;
 use std::convert::TryInto;
@@ -66,12 +66,31 @@ pub fn handler(key: Key, app: &mut App) {
       }
     }
     Key::Esc => {
-      app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+      if app.input_mode == InputMode::NewPlaylist {
+        reset_input(app);
+        app.input_mode = InputMode::Search;
+        app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::MyPlaylists));
+      } else {
+        app.set_current_route_state(Some(ActiveBlock::Empty), Some(ActiveBlock::Library));
+      }
     }
     Key::Enter => {
       let input_str: String = app.input.iter().collect();
 
-      process_input(app, input_str);
+      match app.input_mode {
+        InputMode::NewPlaylist => {
+          if !input_str.is_empty() {
+            app.dispatch(IoEvent::CreatePlaylist(input_str));
+          }
+          reset_input(app);
+          app.input_mode = InputMode::Search;
+          app.set_current_route_state(
+            Some(ActiveBlock::MyPlaylists),
+            Some(ActiveBlock::MyPlaylists),
+          );
+        }
+        InputMode::Search => process_input(app, input_str),
+      }
     }
     Key::Char(c) => {
       app.input.insert(app.input_idx, c);
@@ -92,6 +111,12 @@ pub fn handler(key: Key, app: &mut App) {
     }
     _ => {}
   }
+}
+
+fn reset_input(app: &mut App) {
+  app.input = vec![];
+  app.input_idx = 0;
+  app.input_cursor_position = 0;
 }
 
 fn process_input(app: &mut App, input: String) {
@@ -503,4 +528,39 @@ mod tests {
       assert_eq!(matched, false);
     }
   }
+  #[test]
+  fn esc_in_new_playlist_mode_resets_to_search_mode() {
+    let mut app = App::default();
+    app.input_mode = InputMode::NewPlaylist;
+    app.input = "My mix".chars().collect();
+    app.input_idx = app.input.len();
+
+    handler(Key::Esc, &mut app);
+
+    assert_eq!(app.input_mode, InputMode::Search);
+    assert!(app.input.is_empty());
+    assert_eq!(
+      app.get_current_route().hovered_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
+  #[test]
+  fn enter_in_new_playlist_mode_dispatches_and_resets() {
+    let mut app = App::default();
+    app.input_mode = InputMode::NewPlaylist;
+    app.input = "My mix".chars().collect();
+    app.input_idx = app.input.len();
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(app.input_mode, InputMode::Search);
+    assert!(app.input.is_empty());
+    assert!(app.is_loading); // CreatePlaylist was dispatched
+    assert_eq!(
+      app.get_current_route().active_block,
+      ActiveBlock::MyPlaylists
+    );
+  }
+
 }

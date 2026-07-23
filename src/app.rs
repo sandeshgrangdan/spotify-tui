@@ -131,6 +131,13 @@ pub enum DialogContext {
   PlaylistSearch,
 }
 
+/// What the shared text-input box is currently used for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum InputMode {
+  Search,
+  NewPlaylist,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ActiveBlock {
   Analysis,
@@ -157,6 +164,7 @@ pub enum ActiveBlock {
   Artists,
   BasicView,
   Dialog(DialogContext),
+  PlaylistPicker,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -335,6 +343,9 @@ pub struct App {
   // take more than 1 bytes to store and more than 1 character width to display.
   pub input: Vec<char>,
   pub input_idx: usize,
+  pub input_mode: InputMode,
+  pub playlist_picker_uri: Option<String>,
+  pub playlist_picker_index: usize,
   pub input_cursor_position: u16,
   pub liked_song_ids_set: HashSet<String>,
   pub followed_artist_ids_set: HashSet<String>,
@@ -445,6 +456,9 @@ impl Default for App {
       devices: None,
       input: vec![],
       input_idx: 0,
+      input_mode: InputMode::Search,
+      playlist_picker_uri: None,
+      playlist_picker_index: 0,
       input_cursor_position: 0,
       playlist_offset: 0,
       made_for_you_offset: 0,
@@ -1385,6 +1399,16 @@ impl App {
         playlist_id,
         user_country,
       ));
+    }
+  }
+
+  /// Open the centered playlist-picker modal to add `uri` (a track or
+  /// episode) to one of the user's playlists.
+  pub fn open_playlist_picker(&mut self, uri: String) {
+    if self.playlists.is_some() {
+      self.playlist_picker_uri = Some(uri);
+      self.playlist_picker_index = 0;
+      self.push_navigation_stack(RouteId::Dialog, ActiveBlock::PlaylistPicker);
     }
   }
 

@@ -78,6 +78,23 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('r') => {
       handle_recommended_tracks(app);
     }
+    _ if key == app.user_config.keys.add_to_playlist => {
+      let uri = match app.album_table_context {
+        AlbumTableContext::Full => app
+          .selected_album_full
+          .as_ref()
+          .and_then(|a| a.album.tracks.items.get(app.saved_album_tracks_index))
+          .and_then(|t| t.id.as_ref().map(|id| id.uri())),
+        AlbumTableContext::Simplified => app
+          .selected_album_simplified
+          .as_ref()
+          .and_then(|a| a.tracks.items.get(a.selected_index))
+          .and_then(|t| t.id.as_ref().map(|id| id.uri())),
+      };
+      if let Some(uri) = uri {
+        app.open_playlist_picker(uri);
+      }
+    }
     _ if key == app.user_config.keys.add_item_to_queue => match app.album_table_context {
       AlbumTableContext::Full => {
         if let Some(selected_album) = app.selected_album_full.clone() {

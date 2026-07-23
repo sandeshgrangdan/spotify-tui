@@ -47,6 +47,9 @@ pub enum IoEvent {
   GetCurrentUserSavedAlbums(Option<u32>),
   GetNewReleases(Option<u32>),
   GetTopTracks,
+  AddItemToPlaylist(String, String),
+  RemoveItemFromPlaylist(String, String, u32),
+  CreatePlaylist(String),
   CurrentUserSavedAlbumsContains(Vec<String>),
   CurrentUserSavedAlbumDelete(String),
   CurrentUserSavedAlbumAdd(String),
@@ -206,6 +209,15 @@ impl Network {
       }
       IoEvent::GetNewReleases(offset) => self.get_new_releases(offset).await,
       IoEvent::GetTopTracks => self.get_top_tracks().await,
+      IoEvent::AddItemToPlaylist(playlist_id, item_uri) => {
+        self.add_item_to_playlist(playlist_id, item_uri).await
+      }
+      IoEvent::RemoveItemFromPlaylist(playlist_id, item_uri, page_offset) => {
+        self
+          .remove_item_from_playlist(playlist_id, item_uri, page_offset)
+          .await
+      }
+      IoEvent::CreatePlaylist(name) => self.create_playlist(name).await,
       IoEvent::CurrentUserSavedAlbumsContains(album_ids) => {
         self.current_user_saved_albums_contains(album_ids).await
       }
@@ -1434,6 +1446,99 @@ impl Network {
       }
       Err(e) => {
         self.handle_error(anyhow!("Invalid track ID for audio analysis: {:?}", e)).await;
+      }
+    }
+  }
+
+  /// Parse a raw track/episode URI into a `PlayableId`, or report an error.
+  fn parse_playable_id(item_uri: &str) -> Option<PlayableId<'static>> {
+    if let Ok(id) = TrackId::from_id_or_uri(item_uri) {
+      Some(PlayableId::Track(id.into_static()))
+    } else if let Ok(id) = EpisodeId::from_id_or_uri(item_uri) {
+      Some(PlayableId::Episode(id.into_static()))
+    } else {
+      None
+    }
+  }
+
+  async fn add_item_to_playlist(&mut self, playlist_id: String, item_uri: String) {
+    match (
+      PlaylistId::from_id_or_uri(&playlist_id),
+      Self::parse_playable_id(&item_uri),
+    ) {
+      (Ok(pid), Some(item)) => {
+        if let Err(e) = self
+          .spotify
+          .playlist_add_items(pid.as_ref(), [item], None)
+          .await
+        {
+          self.handle_error(anyhow!(e)).await;
+        }
+      }
+      (Err(e), _) => {
+        self.handle_error(anyhow!("Invalid playlist ID: {:?}", e)).await;
+      }
+      (_, None) => {
+        self
+          .handle_error(anyhow!("Invalid track/episode URI: {}", item_uri))
+          .await;
+      }
+    }
+  }
+
+  async fn remove_item_from_playlist(
+    &mut self,
+    playlist_id: String,
+    item_uri: String,
+    page_offset: u32,
+  ) {
+    match (
+      PlaylistId::from_id_or_uri(&playlist_id),
+      Self::parse_playable_id(&item_uri),
+    ) {
+      (Ok(pid), Some(item)) => {
+        match self
+          .spotify
+          .playlist_remove_all_occurrences_of_items(pid.as_ref(), [item], None)
+          .await
+        {
+          // Refresh the page of the playlist the user is looking at.
+          Ok(_) => self.get_playlist_tracks(playlist_id, page_offset).await,
+          Err(e) => self.handle_error(anyhow!(e)).await,
+        }
+      }
+      (Err(e), _) => {
+        self.handle_error(anyhow!("Invalid playlist ID: {:?}", e)).await;
+      }
+      (_, None) => {
+        self
+          .handle_error(anyhow!("Invalid track/episode URI: {}", item_uri))
+          .await;
+      }
+    }
+  }
+
+  async fn create_playlist(&mut self, name: String) {
+    let user_id = {
+      let app = self.app.lock().await;
+      app.user.as_ref().map(|u| u.id.clone())
+    };
+    match user_id {
+      Some(uid) => {
+        match self
+          .spotify
+          .user_playlist_create(uid, &name, Some(false), None, None)
+          .await
+        {
+          // Refresh the sidebar so the new playlist shows up immediately.
+          Ok(_) => self.get_current_user_playlists().await,
+          Err(e) => self.handle_error(anyhow!(e)).await,
+        }
+      }
+      None => {
+        self
+          .handle_error(anyhow!("User profile not loaded yet; try again in a moment"))
+          .await;
       }
     }
   }

@@ -3,8 +3,8 @@ pub mod help;
 pub mod util;
 use super::app::{
   ActiveBlock, AlbumListContext, AlbumTableContext, App, ArtistBlock, EpisodeTableContext,
-  HomeBlock, HomeMode, RecommendationsContext, RouteId, SearchResultBlock, TrackTableContext,
-  LIBRARY_OPTIONS,
+  HomeBlock, HomeMode, InputMode, RecommendationsContext, RouteId, SearchResultBlock,
+  TrackTableContext, LIBRARY_OPTIONS,
 };
 use help::get_help_docs;
 use rspotify::model::ResumePoint;
@@ -148,7 +148,10 @@ pub fn draw_input_and_help_box(f: &mut Frame, app: &App, layout_chunk: Rect)
       .borders(Borders::ALL)
       .border_type(get_border_type(highlight_state))
       .title(Span::styled(
-        "Search",
+        match app.input_mode {
+          InputMode::NewPlaylist => "New playlist name",
+          InputMode::Search => "Search",
+        },
         get_color(highlight_state, app.user_config.theme),
       ))
       .border_style(get_color(highlight_state, app.user_config.theme)),
@@ -307,6 +310,7 @@ pub fn draw_main_layout(f: &mut Frame, app: &App)
 
   // Possibly draw confirm dialog
   draw_dialog(f, app);
+  draw_playlist_picker(f, app);
 }
 
 pub fn draw_routes(f: &mut Frame, app: &App, layout_chunk: Rect)
@@ -2341,6 +2345,56 @@ fn draw_selectable_list<S>(
       app.user_config.theme,
     ));
   f.render_stateful_widget(list, layout_chunk, &mut state);
+}
+
+fn draw_playlist_picker(f: &mut Frame, app: &App)
+{
+  if app.get_current_route().active_block != ActiveBlock::PlaylistPicker {
+    return;
+  }
+  let bounds = f.area();
+  let width = std::cmp::min(bounds.width.saturating_sub(2), 50);
+  let height = std::cmp::min(bounds.height.saturating_sub(2), 16);
+  let left = bounds.width.saturating_sub(width) / 2;
+  let top = bounds.height / 5;
+  let rect = Rect::new(left, top, width, height);
+
+  f.render_widget(Clear, rect);
+
+  let names: Vec<String> = app
+    .playlists
+    .as_ref()
+    .map(|p| p.items.iter().map(|pl| pl.name.clone()).collect())
+    .unwrap_or_default();
+
+  let items: Vec<ListItem> = names
+    .iter()
+    .map(|n| ListItem::new(Span::raw(n.as_str())))
+    .collect();
+
+  let mut state = ListState::default();
+  if !names.is_empty() {
+    state.select(Some(app.playlist_picker_index.min(names.len() - 1)));
+  }
+
+  let list = List::new(items)
+    .block(
+      Block::default()
+        .title(Span::styled(
+          "Add to playlist (Enter: add, Esc: cancel)",
+          Style::default().fg(app.user_config.theme.active),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(app.user_config.theme.hovered)),
+    )
+    .style(Style::default().fg(app.user_config.theme.text))
+    .highlight_style(
+      Style::default()
+        .fg(app.user_config.theme.selected)
+        .add_modifier(Modifier::BOLD),
+    );
+  f.render_stateful_widget(list, rect, &mut state);
 }
 
 fn draw_dialog(f: &mut Frame, app: &App)

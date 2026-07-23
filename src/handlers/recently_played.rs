@@ -79,6 +79,15 @@ pub fn handler(key: Key, app: &mut App) {
         }
       }
     }
+    _ if key == app.user_config.keys.add_to_playlist => {
+      if let Some(page) = app.recently_played.result.clone() {
+        if let Some(item) = page.items.get(app.recently_played.index) {
+          if let Some(id) = &item.track.id {
+            app.open_playlist_picker(id.uri());
+          }
+        }
+      }
+    }
     _ if key == app.user_config.keys.add_item_to_queue => {
       if let Some(recently_played_result) = &app.recently_played.result.clone() {
         if let Some(history) = recently_played_result.items.get(app.recently_played.index) {

@@ -638,6 +638,36 @@ pub fn handler(key: Key, app: &mut App) {
         }
       }
     }
+    _ if key == app.user_config.keys.add_to_playlist => {
+      let uri = match app.search_results.selected_block {
+        SearchResultBlock::SongSearch => app
+          .search_results
+          .selected_tracks_index
+          .and_then(|i| {
+            app
+              .search_results
+              .tracks
+              .as_ref()
+              .and_then(|p| p.items.get(i))
+          })
+          .and_then(|t| t.id.as_ref().map(|id| id.uri())),
+        SearchResultBlock::EpisodeSearch => app
+          .search_results
+          .selected_episodes_index
+          .and_then(|i| {
+            app
+              .search_results
+              .episodes
+              .as_ref()
+              .and_then(|p| p.items.get(i))
+          })
+          .map(|e| e.id.uri()),
+        _ => None,
+      };
+      if let Some(uri) = uri {
+        app.open_playlist_picker(uri);
+      }
+    }
     _ if key == app.user_config.keys.add_item_to_queue => handle_add_item_to_queue(app),
     _ => {}
   }

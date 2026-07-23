@@ -151,6 +151,21 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('r') => {
       handle_recommended_tracks(app);
     }
+    _ if key == app.user_config.keys.add_to_playlist => {
+      let uri = app
+        .track_table
+        .tracks
+        .get(app.track_table.selected_index)
+        .and_then(|t| t.id.as_ref().map(|id| id.uri()));
+      if let Some(uri) = uri {
+        app.open_playlist_picker(uri);
+      }
+    }
+    Key::Char('D') => {
+      if let Some(TrackTableContext::MyPlaylists) = app.track_table.context {
+        remove_selected_track_from_own_playlist(app);
+      }
+    }
     _ if key == app.user_config.keys.add_item_to_queue => on_queue(app),
     _ => {}
   }
@@ -519,5 +534,156 @@ fn jump_to_start(app: &mut App) {
       TrackTableContext::MadeForYou => {}
     },
     None => {}
+  }
+}
+
+
+/// Remove the selected track from the currently open playlist, but only when
+/// the current user owns that playlist.
+fn remove_selected_track_from_own_playlist(app: &mut App) {
+  let user_id = app.user.as_ref().map(|u| u.id.id().to_string());
+  let playlist = app
+    .active_playlist_index
+    .and_then(|i| app.playlists.as_ref().and_then(|p| p.items.get(i).cloned()));
+  if let (Some(user_id), Some(playlist)) = (user_id, playlist) {
+    if playlist.owner.id.id() == user_id {
+      if let Some(uri) = app
+        .track_table
+        .tracks
+        .get(app.track_table.selected_index)
+        .and_then(|t| t.id.as_ref().map(|id| id.uri()))
+      {
+        app.dispatch(IoEvent::RemoveItemFromPlaylist(
+          playlist.id.id().to_string(),
+          uri,
+          app.playlist_offset,
+        ));
+      }
+    }
+  }
+}
+
+
+#[cfg(test)]
+#[allow(deprecated)]
+mod remove_from_playlist_tests {
+  use super::*;
+  use rspotify::model::{
+    album::SimplifiedAlbum, page::Page, playlist::PlaylistTracksRef,
+    playlist::SimplifiedPlaylist, track::FullTrack, user::PrivateUser, user::PublicUser,
+    PlaylistId, TrackId, UserId,
+  };
+
+  fn make_track(id: &str) -> FullTrack {
+    FullTrack {
+      album: SimplifiedAlbum {
+        album_group: None,
+        album_type: None,
+        artists: vec![],
+        available_markets: vec![],
+        external_urls: Default::default(),
+        href: None,
+        id: None,
+        images: vec![],
+        name: String::new(),
+        release_date: None,
+        release_date_precision: None,
+        restrictions: None,
+      },
+      artists: vec![],
+      available_markets: vec![],
+      disc_number: 1,
+      duration: chrono::TimeDelta::seconds(0),
+      explicit: false,
+      external_ids: Default::default(),
+      external_urls: Default::default(),
+      href: None,
+      id: Some(TrackId::from_id(id.to_string()).unwrap()),
+      is_local: false,
+      is_playable: None,
+      linked_from: None,
+      name: String::new(),
+      popularity: 0,
+      preview_url: None,
+      restrictions: None,
+      track_number: 0,
+      r#type: rspotify::model::Type::Track,
+    }
+  }
+
+  fn make_user(id: &str) -> PrivateUser {
+    PrivateUser {
+      country: None,
+      display_name: None,
+      email: None,
+      external_urls: Default::default(),
+      explicit_content: None,
+      followers: None,
+      href: String::new(),
+      id: UserId::from_id(id.to_string()).unwrap(),
+      images: None,
+      product: None,
+    }
+  }
+
+  fn make_playlist(owner_id: &str) -> SimplifiedPlaylist {
+    let tracks_ref = PlaylistTracksRef {
+      href: String::new(),
+      total: 1,
+    };
+    SimplifiedPlaylist {
+      collaborative: false,
+      external_urls: Default::default(),
+      href: String::new(),
+      id: PlaylistId::from_id("37i9dQZF1DXcBWIGoYBM5M".to_string()).unwrap(),
+      images: vec![],
+      name: "My Playlist".to_string(),
+      owner: PublicUser {
+        display_name: None,
+        external_urls: Default::default(),
+        followers: None,
+        href: String::new(),
+        id: UserId::from_id(owner_id.to_string()).unwrap(),
+        images: vec![],
+      },
+      public: Some(false),
+      snapshot_id: String::new(),
+      tracks: tracks_ref.clone(),
+      items: tracks_ref,
+    }
+  }
+
+  fn app_with_playlist(owner_id: &str, user_id: &str) -> App {
+    let mut app = App::default();
+    app.user = Some(make_user(user_id));
+    app.playlists = Some(Page {
+      href: String::new(),
+      items: vec![make_playlist(owner_id)],
+      limit: 1,
+      next: None,
+      offset: 0,
+      previous: None,
+      total: 1,
+    });
+    app.active_playlist_index = Some(0);
+    app.track_table.tracks = vec![make_track("4iV5W9uYEdYUVa79Axb7Rh")];
+    app.track_table.selected_index = 0;
+    app.track_table.context = Some(TrackTableContext::MyPlaylists);
+    app
+  }
+
+  #[test]
+  fn removes_track_when_user_owns_playlist() {
+    let mut app = app_with_playlist("me", "me");
+    handler(Key::Char('D'), &mut app);
+    // dispatch() flips is_loading — the observable sign the IoEvent was sent
+    assert!(app.is_loading);
+  }
+
+  #[test]
+  fn does_not_remove_track_from_foreign_playlist() {
+    let mut app = app_with_playlist("someone_else", "me");
+    handler(Key::Char('D'), &mut app);
+    assert!(!app.is_loading);
   }
 }
