@@ -631,6 +631,81 @@ impl Network {
     }
   }
 
+  /// Build one playback request. Factored out so the 404 device-wake retry
+  /// can re-issue exactly the same request instead of degrading to resume.
+  async fn attempt_playback(
+    &self,
+    context_uri: Option<&str>,
+    uris: Option<&[String]>,
+    offset: Option<usize>,
+    device_id: Option<&str>,
+  ) -> Result<(), rspotify::ClientError> {
+    if let Some(context) = context_uri {
+      // Offset within a context: prefer the URI at the index when we have the
+      // list; otherwise send the index itself (rspotify serializes the
+      // Duration's milliseconds as the "position" index).
+      let ctx_offset = offset.and_then(|idx| match uris {
+        Some(uri_list) => uri_list.get(idx).map(|u| Offset::Uri(u.clone())),
+        None => Some(Offset::Position(chrono::Duration::milliseconds(idx as i64))),
+      });
+
+      if let Ok(context_id) = rspotify::model::AlbumId::from_id_or_uri(context) {
+        self
+          .spotify
+          .start_context_playback(
+            rspotify::model::PlayContextId::Album(context_id),
+            device_id,
+            ctx_offset,
+            None,
+          )
+          .await
+      } else if let Ok(context_id) = PlaylistId::from_id_or_uri(context) {
+        self
+          .spotify
+          .start_context_playback(
+            rspotify::model::PlayContextId::Playlist(context_id),
+            device_id,
+            ctx_offset,
+            None,
+          )
+          .await
+      } else if let Ok(context_id) = ArtistId::from_id_or_uri(context) {
+        self
+          .spotify
+          .start_context_playback(
+            rspotify::model::PlayContextId::Artist(context_id),
+            device_id,
+            ctx_offset,
+            None,
+          )
+          .await
+      } else if let Ok(context_id) = ShowId::from_id_or_uri(context) {
+        self
+          .spotify
+          .start_context_playback(
+            rspotify::model::PlayContextId::Show(context_id),
+            device_id,
+            ctx_offset,
+            None,
+          )
+          .await
+      } else {
+        // Unrecognized context URI - fall back to resuming.
+        self.spotify.resume_playback(device_id, None).await
+      }
+    } else if let Some(uri_list) = uris {
+      // Play specific URIs (tracks/episodes) - offset is an index into the list
+      let uri_offset =
+        offset.and_then(|idx| uri_list.get(idx).map(|u| Offset::Uri(u.clone())));
+      self
+        .spotify
+        .start_uris_playback(parse_playable_ids(uri_list), device_id, uri_offset, None)
+        .await
+    } else {
+      self.spotify.resume_playback(device_id, None).await
+    }
+  }
+
   async fn start_playback(
     &mut self,
     context_uri: Option<String>,
@@ -638,18 +713,17 @@ impl Network {
     offset: Option<usize>,
   ) {
     // Resolve target device. The currently-active playback context's device is
-    // the "truth" — that's what the TUI shows in the bottom bar — so prefer it
+    // the "truth" - that's what the TUI shows in the bottom bar - so prefer it
     // over any stored client_config.device_id (which may be stale).
-    let context_device: Option<(Option<String>, String)> = {
+    let context_device: Option<Option<String>> = {
       let app = self.app.lock().await;
       app
         .current_playback_context
         .as_ref()
-        .map(|ctx| (ctx.device.id.clone(), ctx.device.name.clone()))
+        .map(|ctx| ctx.device.id.clone())
     };
-        let active_device_id: Option<String> = context_device
-      .as_ref()
-      .and_then(|(id, _)| id.clone())
+    let active_device_id: Option<String> = context_device
+      .and_then(|id| id)
       .or_else(|| self.client_config.device_id.clone());
     // Persist whatever we resolved so subsequent calls have it.
     if let Some(ref id) = active_device_id {
@@ -659,141 +733,27 @@ impl Network {
       }
     }
     let device_arg = active_device_id.as_deref();
-    
-    let result = if let Some(context) = context_uri {
-      // Play a context (album, playlist, artist, show)
-      // Build offset from uris if provided, otherwise use Uri-based offset or None
-      let ctx_offset = offset.and_then(|idx| {
-        // If we have a list of URIs, use the URI at that index as offset
-        if let Some(ref uri_list) = uris {
-          uri_list.get(idx).map(|u| Offset::Uri(u.clone()))
-        } else {
-          // No URI list — we can't easily construct an index-based Offset
-          // without chrono. For now, skip the offset.
-          // TODO(phase-2): add chrono as direct dep to use Offset::Position(Duration::milliseconds(idx as i64))
-          None
-        }
-      });
 
-      if let Ok(context_id) = rspotify::model::AlbumId::from_id_or_uri(&context) {
-        self
-          .spotify
-          .start_context_playback(
-            rspotify::model::PlayContextId::Album(context_id),
-            device_arg,
-            ctx_offset,
-            None,
-          )
-          .await
-      } else if let Ok(context_id) = PlaylistId::from_id_or_uri(&context) {
-        self
-          .spotify
-          .start_context_playback(
-            rspotify::model::PlayContextId::Playlist(context_id),
-            device_arg,
-            ctx_offset,
-            None,
-          )
-          .await
-      } else if let Ok(context_id) = ArtistId::from_id_or_uri(&context) {
-        self
-          .spotify
-          .start_context_playback(
-            rspotify::model::PlayContextId::Artist(context_id),
-            device_arg,
-            ctx_offset,
-            None,
-          )
-          .await
-      } else if let Ok(context_id) = ShowId::from_id_or_uri(&context) {
-        self
-          .spotify
-          .start_context_playback(
-            rspotify::model::PlayContextId::Show(context_id),
-            device_arg,
-            ctx_offset,
-            None,
-          )
-          .await
-      } else {
-        // Try treating it as a generic URI with context — resume playback
-        self.spotify.resume_playback(device_arg, None).await
-      }
-    } else if let Some(ref uri_list) = uris {
-      // Play specific URIs (tracks/episodes) — offset is an index into the list
-      let uri_offset = offset.and_then(|idx| {
-        uri_list.get(idx).map(|u| Offset::Uri(u.clone()))
-      });
-      let playable_ids: Vec<PlayableId<'static>> = uri_list
-        .iter()
-        .filter_map(|uri| {
-          if let Ok(id) = TrackId::from_id_or_uri(uri) {
-            Some(PlayableId::Track(id.into_static()))
-          } else if let Ok(id) = EpisodeId::from_id_or_uri(uri) {
-            Some(PlayableId::Episode(id.into_static()))
-          } else {
-            None
-          }
-        })
-        .collect();
-      self
-        .spotify
-        .start_uris_playback(playable_ids, device_arg, uri_offset, None)
-        .await
-    } else {
-      // Resume playback with no context/uris
-      self
-        .spotify
-        .resume_playback(device_arg, None)
-        .await
-    };
+    let result = self
+      .attempt_playback(context_uri.as_deref(), uris.as_deref(), offset, device_arg)
+      .await;
 
-        // If Spotify rejected with 404 and we have a target device, try transferring
-    // playback to it first then retry the play. Spotify often returns 404 when
-    // a device is technically present in the device list but hasn't been
-    // "warmed up" with a recent transfer; the transfer call wakes it up.
-    let final_result = if let (Err(ref e), Some(id)) = (&result, device_arg) {
-      let err_str = e.to_string();
-      if err_str.contains("404") {
-                match self.spotify.transfer_playback(id, Some(true)).await {
-          Ok(()) => {
-            // Give Spotify a moment to register the transfer, then retry.
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            // Retry whichever flavor of playback we attempted.
-            let retry = if let Some(uri_list) = uris.as_ref() {
-              let uri_offset = offset.and_then(|idx| {
-                uri_list.get(idx).map(|u| Offset::Uri(u.clone()))
-              });
-              let playable_ids: Vec<PlayableId<'static>> = uri_list
-                .iter()
-                .filter_map(|uri| {
-                  if let Ok(tid) = TrackId::from_id_or_uri(uri) {
-                    Some(PlayableId::Track(tid.into_static()))
-                  } else if let Ok(eid) = EpisodeId::from_id_or_uri(uri) {
-                    Some(PlayableId::Episode(eid.into_static()))
-                  } else {
-                    None
-                  }
-                })
-                .collect();
-              self
-                .spotify
-                .start_uris_playback(playable_ids, Some(id), uri_offset, None)
-                .await
-            } else {
-              self.spotify.resume_playback(Some(id), None).await
-            };
-                        retry
-          }
-          Err(te) => {
-                        result
-          }
+    // Spotify often returns 404 when a device is listed but hasn't been
+    // "warmed up" with a recent transfer; transfer to it and retry the same
+    // request once.
+    let needs_retry = matches!(&result, Err(e) if e.to_string().contains("404"));
+    let final_result = match (needs_retry, device_arg) {
+      (true, Some(id)) => match self.spotify.transfer_playback(id, Some(true)).await {
+        Ok(()) => {
+          // Give Spotify a moment to register the transfer, then retry.
+          tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+          self
+            .attempt_playback(context_uri.as_deref(), uris.as_deref(), offset, Some(id))
+            .await
         }
-      } else {
-        result
-      }
-    } else {
-      result
+        Err(_) => result,
+      },
+      _ => result,
     };
 
     if let Err(e) = final_result {
@@ -1718,6 +1678,23 @@ fn extract_lyrics_payload(
   } else {
     Some((synced, plain_text))
   }
+}
+
+/// Convert raw track/episode URIs into typed `PlayableId`s, dropping any that
+/// parse as neither.
+fn parse_playable_ids(uri_list: &[String]) -> Vec<PlayableId<'static>> {
+  uri_list
+    .iter()
+    .filter_map(|uri| {
+      if let Ok(id) = TrackId::from_id_or_uri(uri) {
+        Some(PlayableId::Track(id.into_static()))
+      } else if let Ok(id) = EpisodeId::from_id_or_uri(uri) {
+        Some(PlayableId::Episode(id.into_static()))
+      } else {
+        None
+      }
+    })
+    .collect()
 }
 
 /// Parse an LRC-format string into `(milliseconds, line)` pairs.
