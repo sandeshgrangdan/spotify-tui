@@ -106,7 +106,8 @@ pub fn get_spotify(client_config: &ClientConfig, paths: &ConfigPaths) -> AuthCod
     "user-read-playback-state",
     "user-read-playback-position",
     "user-read-private",
-    "user-read-recently-played"
+    "user-read-recently-played",
+    "user-top-read"
   );
 
   let oauth = OAuth {
@@ -568,7 +569,8 @@ impl Network {
 
   async fn get_search_results(&mut self, search_term: String, country: Option<Country>) {
     let market = country.map(Market::Country);
-    let limit = self.large_search_limit;
+    // Spotify capped the search limit at 10 in the February 2026 API migration.
+    let limit = self.large_search_limit.min(10);
 
     let search_types = vec![
       SearchType::Track,
