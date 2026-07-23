@@ -582,6 +582,7 @@ impl Network {
       SearchType::Album,
       SearchType::Playlist,
       SearchType::Show,
+      SearchType::Episode,
     ];
 
     match self
@@ -595,6 +596,7 @@ impl Network {
         albums,
         playlists,
         shows,
+        episodes,
         ..
       }) => {
         let track_ids: Vec<String> = tracks
@@ -625,6 +627,7 @@ impl Network {
           app.search_results.albums = albums;
           app.search_results.playlists = playlists;
           app.search_results.shows = shows;
+          app.search_results.episodes = episodes;
           app.push_navigation_stack(RouteId::Search, ActiveBlock::SearchResultBlock);
         }
 

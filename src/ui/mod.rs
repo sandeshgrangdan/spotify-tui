@@ -653,7 +653,7 @@ pub fn draw_search_results(f: &mut Frame, app: &App, layout_chunk: Rect)
   {
     let podcasts_block = Layout::default()
       .direction(Direction::Horizontal)
-      .constraints([Constraint::Percentage(100)].as_ref())
+      .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
       .split(chunks[2]);
 
     let podcasts = match &app.search_results.shows {
@@ -679,6 +679,24 @@ pub fn draw_search_results(f: &mut Frame, app: &App, layout_chunk: Rect)
       &podcasts,
       get_search_results_highlight_state(app, SearchResultBlock::ShowSearch),
       app.search_results.selected_shows_index,
+    );
+
+    let episodes = match &app.search_results.episodes {
+      Some(episodes) => episodes
+        .items
+        .iter()
+        .map(|item| format!("{} ({})", item.name, item.release_date))
+        .collect(),
+      None => vec![],
+    };
+    draw_selectable_list(
+      f,
+      app,
+      podcasts_block[1],
+      "Episodes",
+      &episodes,
+      get_search_results_highlight_state(app, SearchResultBlock::EpisodeSearch),
+      app.search_results.selected_episodes_index,
     );
   }
 }

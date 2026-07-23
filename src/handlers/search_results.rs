@@ -57,6 +57,15 @@ fn handle_down_press_on_selected_block(app: &mut App) {
         app.search_results.selected_shows_index = Some(next_index);
       }
     }
+    SearchResultBlock::EpisodeSearch => {
+      if let Some(result) = &app.search_results.episodes {
+        let next_index = common_key_events::on_down_press_handler(
+          &result.items,
+          app.search_results.selected_episodes_index,
+        );
+        app.search_results.selected_episodes_index = Some(next_index);
+      }
+    }
     SearchResultBlock::Empty => {}
   }
 }
@@ -73,10 +82,13 @@ fn handle_down_press_on_hovered_block(app: &mut App) {
       app.search_results.hovered_block = SearchResultBlock::PlaylistSearch;
     }
     SearchResultBlock::PlaylistSearch => {
-      app.search_results.hovered_block = SearchResultBlock::ShowSearch;
+      app.search_results.hovered_block = SearchResultBlock::EpisodeSearch;
     }
     SearchResultBlock::ShowSearch => {
       app.search_results.hovered_block = SearchResultBlock::SongSearch;
+    }
+    SearchResultBlock::EpisodeSearch => {
+      app.search_results.hovered_block = SearchResultBlock::ArtistSearch;
     }
     SearchResultBlock::Empty => {}
   }
@@ -130,6 +142,15 @@ fn handle_up_press_on_selected_block(app: &mut App) {
         app.search_results.selected_shows_index = Some(next_index);
       }
     }
+    SearchResultBlock::EpisodeSearch => {
+      if let Some(result) = &app.search_results.episodes {
+        let next_index = common_key_events::on_up_press_handler(
+          &result.items,
+          app.search_results.selected_episodes_index,
+        );
+        app.search_results.selected_episodes_index = Some(next_index);
+      }
+    }
     SearchResultBlock::Empty => {}
   }
 }
@@ -143,13 +164,16 @@ fn handle_up_press_on_hovered_block(app: &mut App) {
       app.search_results.hovered_block = SearchResultBlock::ShowSearch;
     }
     SearchResultBlock::ArtistSearch => {
-      app.search_results.hovered_block = SearchResultBlock::ShowSearch;
+      app.search_results.hovered_block = SearchResultBlock::EpisodeSearch;
     }
     SearchResultBlock::PlaylistSearch => {
       app.search_results.hovered_block = SearchResultBlock::ArtistSearch;
     }
     SearchResultBlock::ShowSearch => {
       app.search_results.hovered_block = SearchResultBlock::AlbumSearch;
+    }
+    SearchResultBlock::EpisodeSearch => {
+      app.search_results.hovered_block = SearchResultBlock::PlaylistSearch;
     }
     SearchResultBlock::Empty => {}
   }
@@ -185,6 +209,12 @@ fn handle_high_press_on_selected_block(app: &mut App) {
       if let Some(_result) = &app.search_results.shows {
         let next_index = common_key_events::on_high_press_handler();
         app.search_results.selected_shows_index = Some(next_index);
+      }
+    }
+    SearchResultBlock::EpisodeSearch => {
+      if let Some(_result) = &app.search_results.episodes {
+        let next_index = common_key_events::on_high_press_handler();
+        app.search_results.selected_episodes_index = Some(next_index);
       }
     }
     SearchResultBlock::Empty => {}
@@ -223,6 +253,12 @@ fn handle_middle_press_on_selected_block(app: &mut App) {
         app.search_results.selected_shows_index = Some(next_index);
       }
     }
+    SearchResultBlock::EpisodeSearch => {
+      if let Some(result) = &app.search_results.episodes {
+        let next_index = common_key_events::on_middle_press_handler(&result.items);
+        app.search_results.selected_episodes_index = Some(next_index);
+      }
+    }
     SearchResultBlock::Empty => {}
   }
 }
@@ -259,6 +295,12 @@ fn handle_low_press_on_selected_block(app: &mut App) {
         app.search_results.selected_shows_index = Some(next_index);
       }
     }
+    SearchResultBlock::EpisodeSearch => {
+      if let Some(result) = &app.search_results.episodes {
+        let next_index = common_key_events::on_low_press_handler(&result.items);
+        app.search_results.selected_episodes_index = Some(next_index);
+      }
+    }
     SearchResultBlock::Empty => {}
   }
 }
@@ -280,6 +322,16 @@ fn handle_add_item_to_queue(app: &mut App) {
     SearchResultBlock::PlaylistSearch => {}
     SearchResultBlock::AlbumSearch => {}
     SearchResultBlock::ShowSearch => {}
+    SearchResultBlock::EpisodeSearch => {
+      if let (Some(index), Some(episodes)) = (
+        app.search_results.selected_episodes_index,
+        &app.search_results.episodes,
+      ) {
+        if let Some(episode) = episodes.items.get(index) {
+          app.dispatch(IoEvent::AddItemToQueue(episode.id.uri()));
+        }
+      }
+    }
     SearchResultBlock::Empty => {}
   };
 }
@@ -343,6 +395,20 @@ fn handle_enter_event_on_selected_block(app: &mut App) {
         };
       }
     }
+    SearchResultBlock::EpisodeSearch => {
+      if let (Some(index), Some(episodes)) = (
+        app.search_results.selected_episodes_index,
+        &app.search_results.episodes,
+      ) {
+        if let Some(episode) = episodes.items.get(index) {
+          app.dispatch(IoEvent::StartPlayback(
+            None,
+            Some(vec![episode.id.uri()]),
+            Some(0),
+          ));
+        }
+      }
+    }
     SearchResultBlock::Empty => {}
   };
 }
@@ -379,6 +445,12 @@ fn handle_enter_event_on_hovered_block(app: &mut App) {
       app.search_results.selected_shows_index = Some(next_index);
       app.search_results.selected_block = SearchResultBlock::ShowSearch;
     }
+    SearchResultBlock::EpisodeSearch => {
+      let next_index = app.search_results.selected_episodes_index.unwrap_or(0);
+
+      app.search_results.selected_episodes_index = Some(next_index);
+      app.search_results.selected_block = SearchResultBlock::EpisodeSearch;
+    }
     SearchResultBlock::Empty => {}
   };
 }
@@ -414,6 +486,7 @@ fn handle_recommended_tracks(app: &mut App) {
     }
     SearchResultBlock::PlaylistSearch => {}
     SearchResultBlock::ShowSearch => {}
+    SearchResultBlock::EpisodeSearch => {}
     SearchResultBlock::Empty => {}
   }
 }
@@ -455,6 +528,9 @@ pub fn handler(key: Key, app: &mut App) {
         SearchResultBlock::ShowSearch => {
           common_key_events::handle_left_event(app);
         }
+        SearchResultBlock::EpisodeSearch => {
+          app.search_results.hovered_block = SearchResultBlock::ShowSearch;
+        }
         SearchResultBlock::Empty => {}
       }
     }
@@ -473,7 +549,10 @@ pub fn handler(key: Key, app: &mut App) {
         SearchResultBlock::PlaylistSearch => {
           app.search_results.hovered_block = SearchResultBlock::AlbumSearch;
         }
-        SearchResultBlock::ShowSearch => {}
+        SearchResultBlock::ShowSearch => {
+          app.search_results.hovered_block = SearchResultBlock::EpisodeSearch;
+        }
+        SearchResultBlock::EpisodeSearch => {}
         SearchResultBlock::Empty => {}
       }
     }
@@ -505,7 +584,14 @@ pub fn handler(key: Key, app: &mut App) {
       SearchResultBlock::AlbumSearch => {
         app.current_user_saved_album_add(ActiveBlock::SearchResultBlock)
       }
-      SearchResultBlock::SongSearch => {}
+      SearchResultBlock::SongSearch => {
+        if let Some(track_id) = selected_search_track_id(app) {
+          if !app.liked_song_ids_set.contains(&track_id) {
+            app.dispatch(IoEvent::ToggleSaveTrack(track_id));
+          }
+        }
+      }
+      SearchResultBlock::EpisodeSearch => {}
       SearchResultBlock::ArtistSearch => app.user_follow_artists(ActiveBlock::SearchResultBlock),
       SearchResultBlock::PlaylistSearch => {
         app.user_follow_playlist();
@@ -517,7 +603,14 @@ pub fn handler(key: Key, app: &mut App) {
       SearchResultBlock::AlbumSearch => {
         app.current_user_saved_album_delete(ActiveBlock::SearchResultBlock)
       }
-      SearchResultBlock::SongSearch => {}
+      SearchResultBlock::SongSearch => {
+        if let Some(track_id) = selected_search_track_id(app) {
+          if app.liked_song_ids_set.contains(&track_id) {
+            app.dispatch(IoEvent::ToggleSaveTrack(track_id));
+          }
+        }
+      }
+      SearchResultBlock::EpisodeSearch => {}
       SearchResultBlock::ArtistSearch => app.user_unfollow_artists(ActiveBlock::SearchResultBlock),
       SearchResultBlock::PlaylistSearch => {
         if let (Some(playlists), Some(selected_index)) = (
@@ -538,8 +631,60 @@ pub fn handler(key: Key, app: &mut App) {
       SearchResultBlock::Empty => {}
     },
     Key::Char('r') => handle_recommended_tracks(app),
+    Key::Char('s') => {
+      if app.search_results.selected_block == SearchResultBlock::SongSearch {
+        if let Some(track_id) = selected_search_track_id(app) {
+          app.dispatch(IoEvent::ToggleSaveTrack(track_id));
+        }
+      }
+    }
     _ if key == app.user_config.keys.add_item_to_queue => handle_add_item_to_queue(app),
-    // Add `s` to "see more" on each option
     _ => {}
+  }
+}
+
+/// Id of the track currently selected in the songs pane, if any.
+fn selected_search_track_id(app: &App) -> Option<String> {
+  let index = app.search_results.selected_tracks_index?;
+  let tracks = app.search_results.tracks.as_ref()?;
+  let track = tracks.items.get(index)?;
+  track.id.as_ref().map(|id| id.id().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn hover_navigation_reaches_episode_pane() {
+    let mut app = App::default();
+    app.search_results.hovered_block = SearchResultBlock::PlaylistSearch;
+
+    handler(Key::Char('j'), &mut app);
+    assert_eq!(
+      app.search_results.hovered_block,
+      SearchResultBlock::EpisodeSearch
+    );
+
+    // and left goes back to the shows pane
+    handler(Key::Char('h'), &mut app);
+    assert_eq!(
+      app.search_results.hovered_block,
+      SearchResultBlock::ShowSearch
+    );
+  }
+
+  #[test]
+  fn enter_on_hovered_episode_pane_selects_it() {
+    let mut app = App::default();
+    app.search_results.hovered_block = SearchResultBlock::EpisodeSearch;
+    app.search_results.selected_block = SearchResultBlock::Empty;
+
+    handler(Key::Enter, &mut app);
+
+    assert_eq!(
+      app.search_results.selected_block,
+      SearchResultBlock::EpisodeSearch
+    );
   }
 }
