@@ -6,8 +6,26 @@
 
 ### Added
 
+- Playlist management: add selected track/episode to a playlist via a picker modal (`t`), create playlists (`N` in the playlist pane), remove tracks from playlists you own (`D`)
+- "New Releases" library row backed by the browse API, with pagination and `w` to save an album
+- "Top Tracks" library row showing your personal top tracks
+- Episode results pane in search (row 3 is now Podcasts | Episodes); episodes can be played and queued
+- Save/unsave the selected song from search results (`s`, `w`, `D`)
+- Client-side "radio" stations built from artist top tracks — the `r` key works again even though Spotify removed the `/recommendations` endpoint for third-party apps
+- Liked/saved/followed icons now sync when search results, artist pages, and album pages load
+- Pagination for playlists opened from search results
 - Show `album_type` in Search panes [#868](https://github.com/Rigellute/spotify-tui/pull/868)
 - Add option to set window title to "spt - Spotify TUI" on startup [#844](https://github.com/Rigellute/spotify-tui/pull/844)
+
+### Fixed
+
+- Artist pages load again: the removed related-artists endpoint no longer kills the whole page
+- Home "Your Top Artists" section loads: the missing `user-top-read` OAuth scope was added (delete the token cache / re-auth to pick it up)
+- Search works again under the February 2026 API rules (limit capped at 10)
+- Playing a track inside an album/playlist/liked-songs context now starts at that track instead of track 1
+- CLI subcommands (`spt playback/play/list/search`) run again — dispatch was severed during the clap 4 migration — and per-flag format defaults are back
+- Audio analysis view degrades gracefully instead of showing a misleading error screen
+- Several debug-build panics (help menu paging, narrow terminals, empty lists)
 
 ## [0.25.0] - 2021-08-24
 

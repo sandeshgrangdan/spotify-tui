@@ -315,6 +315,17 @@ pub fn handler(key: Key, app: &mut App) {
           };
         }
       }
+      _ if key == app.user_config.keys.add_to_playlist => {
+        if let ArtistBlock::TopTracks = artist.artist_selected_block {
+          if let Some(uri) = artist
+            .top_tracks
+            .get(artist.selected_top_track_index)
+            .and_then(|t| t.id.as_ref().map(|id| id.uri()))
+          {
+            app.open_playlist_picker(uri);
+          }
+        }
+      }
       _ => {}
     };
   }
