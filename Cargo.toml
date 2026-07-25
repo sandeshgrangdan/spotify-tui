@@ -1,15 +1,30 @@
 [package]
-name = "spotify-tui"
-description = "A terminal user interface for Spotify"
-homepage = "https://github.com/Rigellute/spotify-tui"
-documentation = "https://github.com/Rigellute/spotify-tui"
-repository = "https://github.com/Rigellute/spotify-tui"
-keywords = ["spotify", "tui", "cli", "terminal"]
+name = "spotui"
+description = "A terminal user interface for Spotify, with an app-like home screen. Fork of spotify-tui, modernized for the post-2024 Web API."
+homepage = "https://github.com/sandeshgrangdan/spotify-tui"
+documentation = "https://github.com/sandeshgrangdan/spotify-tui"
+repository = "https://github.com/sandeshgrangdan/spotify-tui"
+keywords = ["spotify", "tui", "cli", "terminal", "music"]
 categories = ["command-line-utilities"]
-version = "0.25.0"
-authors = ["Alexander Keliris <rigellute@gmail.com>"]
+# Continues the numbering of upstream spotify-tui, which stopped at 0.25.0.
+version = "0.26.0"
+authors = [
+  "Sandesh Tamang",
+  "Alexander Keliris <rigellute@gmail.com>",
+]
 edition = "2018"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+# Screenshots, packaging and CI config aren't needed by `cargo install`, and the
+# images alone are over a megabyte.
+exclude = [
+  "*.png",
+  "snap/",
+  ".github/",
+  ".all-contributorsrc",
+  "how_to_release.md",
+  "docs/",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

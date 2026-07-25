@@ -1,18 +1,21 @@
-# Spotify TUI
+# spotui
 
-![Continuous Integration](https://github.com/Rigellute/spotify-tui/workflows/Continuous%20Integration/badge.svg?branch=master&event=push)
+[![Crates.io](https://img.shields.io/crates/v/spotui.svg)](https://crates.io/crates/spotui)
 ![](https://img.shields.io/badge/license-MIT-blueviolet.svg)
-![](https://tokei.rs/b1/github/Rigellute/spotify-tui?category=code)
-[![Crates.io](https://img.shields.io/crates/v/spotify-tui.svg)](https://crates.io/crates/spotify-tui)
-![](https://img.shields.io/github/v/release/Rigellute/spotify-tui?color=%23c694ff)
 
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-94-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-[![Follow Alexander Keliris (Rigellute)](https://img.shields.io/twitter/follow/AlexKeliris?label=Follow%20Alexander%20Keliris%20%28Rigellute%29&style=social)](https://twitter.com/intent/follow?screen_name=AlexKeliris)
+A Spotify client for the terminal written in Rust. The installed binary is `spt`.
 
-A Spotify client for the terminal written in Rust.
+> **This is a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui)**
+> by [Alexander Keliris (Rigellute)](https://twitter.com/intent/follow?screen_name=AlexKeliris)
+> and its 94 [contributors](#contributors), published separately on crates.io as
+> **`spotui`** because upstream stopped at 0.25.0 while several of the Spotify
+> endpoints it relied on were withdrawn. Version numbering continues from
+> upstream's 0.25.0, the licence is unchanged (MIT), and the config directory is
+> still `~/.config/spotify-tui` so an existing install keeps its credentials.
 
 This fork is modernized for rspotify 0.16 / ratatui 0.29 and the post-2024 Spotify Web API. On top of upstream it adds:
 
@@ -64,6 +67,21 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
 ## Installation
 
 The binary executable is `spt`.
+
+```bash
+cargo install spotui
+```
+
+If you already have upstream `spotify-tui` installed, that command will stop
+because the `spt` binary already exists — this fork installs the same binary
+name, so replace it with:
+
+```bash
+cargo install --force spotui
+```
+
+The package managers below distribute **upstream** `spotify-tui`, not this fork.
+They are kept here for reference and for the platform-specific build notes.
 
 ### Homebrew
 
@@ -132,12 +150,12 @@ sudo dnf copr enable atim/spotify-tui -y && sudo dnf install spotify-tui
 
 ### Cargo
 
-Use this option if your architecture is not supported by the pre-built binaries found on the [releases page](https://github.com/Rigellute/spotify-tui/releases).
+This is how you install **this fork**.
 
 First, install [Rust](https://www.rust-lang.org/tools/install) (using the recommended `rustup` installation method) and then
 
 ```bash
-cargo install spotify-tui
+cargo install spotui
 ```
 
 This method will build the binary from source.

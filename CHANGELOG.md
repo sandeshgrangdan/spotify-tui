@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-25
+
+First release of the `spotui` fork, continuing from upstream `spotify-tui`
+0.25.0. Everything below landed on this fork.
+
 - Fix confirmation dialog handling on playlist delete [#910](https://github.com/Rigellute/spotify-tui/pull/910)
 
 ### Changed
