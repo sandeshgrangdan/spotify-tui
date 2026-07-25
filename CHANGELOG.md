@@ -6,6 +6,7 @@
 
 ### Changed
 
+- Fixed the search-input cursor sitting two rows above the box in the wide layout — it now accounts for the top bar.
 - The back key (`q`) no longer quits the app when there is nowhere left to go back to — it is now purely a navigation key. Only `Ctrl+c` terminates the TUI.
 
 ### Added

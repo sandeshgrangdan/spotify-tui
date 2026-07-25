@@ -328,17 +328,17 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
       terminal.hide_cursor()?;
     }
 
-    let cursor_offset = if app.size.height > ui::util::SMALL_TERMINAL_HEIGHT {
-      2
-    } else {
-      1
-    };
-
-    // Put the cursor back inside the input box
-    terminal.backend_mut().execute(MoveTo(
-      cursor_offset + app.input_cursor_position,
-      cursor_offset,
-    ))?;
+    // Put the cursor back inside the input box (accounts for the wide-layout
+    // top bar, the outer margin, and the box border).
+    let (cursor_col, cursor_row) = ui::util::search_cursor_position(
+      app.size.width,
+      app.size.height,
+      app.user_config.behavior.enforce_wide_search_bar,
+      app.input_cursor_position,
+    );
+    terminal
+      .backend_mut()
+      .execute(MoveTo(cursor_col, cursor_row))?;
 
     // Handle authentication refresh
     if SystemTime::now() > app.spotify_token_expiry {

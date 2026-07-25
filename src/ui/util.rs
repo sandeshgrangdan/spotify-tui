@@ -138,9 +138,58 @@ pub fn get_main_layout_margin(app: &App) -> u16 {
   }
 }
 
+/// Screen `(column, row)` for the text cursor inside the search input box.
+///
+/// The box's position tracks the responsive layout in `draw_main_layout`:
+/// in wide mode the search box lives in the sidebar *below* the 2-row top bar,
+/// while in narrow mode it is the top row. Both add the outer layout margin
+/// and the box's own border.
+pub fn search_cursor_position(
+  width: u16,
+  height: u16,
+  enforce_wide_search_bar: bool,
+  input_cursor_position: u16,
+) -> (u16, u16) {
+  let margin = if height > SMALL_TERMINAL_HEIGHT { 1 } else { 0 };
+  let border = 1;
+  let wide = width >= SMALL_TERMINAL_WIDTH && !enforce_wide_search_bar;
+  let top_bar = if wide { 2 } else { 0 };
+  let column = margin + border + input_cursor_position;
+  let row = margin + top_bar + border;
+  (column, row)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn search_cursor_position_wide_clears_top_bar() {
+    // width >= 150, height > 45: margin 1 + top bar 2 + border 1 = row 4.
+    assert_eq!(search_cursor_position(180, 50, false, 0), (2, 4));
+    // Cursor column tracks the text offset.
+    assert_eq!(search_cursor_position(180, 50, false, 5), (7, 4));
+  }
+
+  #[test]
+  fn search_cursor_position_narrow_has_no_top_bar() {
+    // width < 150: no top bar. margin 1 + border 1 = row 2.
+    assert_eq!(search_cursor_position(120, 50, false, 0), (2, 2));
+  }
+
+  #[test]
+  fn search_cursor_position_enforce_wide_search_bar_uses_narrow_layout() {
+    // enforce_wide_search_bar forces the narrow layout even on a wide terminal.
+    assert_eq!(search_cursor_position(180, 50, true, 0), (2, 2));
+  }
+
+  #[test]
+  fn search_cursor_position_small_terminal_drops_margin() {
+    // height <= 45: no outer margin. narrow: border only -> row 1.
+    assert_eq!(search_cursor_position(120, 40, false, 0), (1, 1));
+    // wide small terminal: top bar 2 + border 1 = row 3, column border only.
+    assert_eq!(search_cursor_position(180, 40, false, 0), (1, 3));
+  }
 
   #[test]
   fn millis_to_minutes_test() {
