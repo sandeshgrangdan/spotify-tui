@@ -9,7 +9,6 @@ mod devices;
 mod dialog;
 mod empty;
 mod episode_table;
-mod error_screen;
 mod help_menu;
 mod home;
 mod input;
@@ -49,7 +48,7 @@ pub fn handle_app(key: Key, app: &mut App) {
       handle_jump_to_context(app);
     }
     _ if key == app.user_config.keys.manage_devices => {
-      app.dispatch(IoEvent::GetDevices);
+      app.dispatch(IoEvent::GetDevices(true));
     }
     _ if key == app.user_config.keys.manage_queue => {
       app.queue_selected_index = 0;
@@ -142,9 +141,6 @@ fn handle_block_events(key: Key, app: &mut App) {
     ActiveBlock::HelpMenu => {
       help_menu::handler(key, app);
     }
-    ActiveBlock::Error => {
-      error_screen::handler(key, app);
-    }
     ActiveBlock::SelectDevice => {
       select_device::handler(key, app);
     }
@@ -209,9 +205,6 @@ fn handle_escape(app: &mut App) {
         artist.artist_selected_block = ArtistBlock::Empty;
       }
     }
-    ActiveBlock::Error => {
-      app.pop_navigation_stack();
-    }
     ActiveBlock::Dialog(_) => {
       app.pop_navigation_stack();
     }
@@ -222,11 +215,7 @@ fn handle_escape(app: &mut App) {
     // These are global views that have no active/inactive distinction so do nothing
     ActiveBlock::SelectDevice | ActiveBlock::Analysis => {}
     ActiveBlock::Home => {
-      if app.home_section_entered {
-        app.home_section_entered = false;
-      } else {
-        app.set_current_route_state(Some(ActiveBlock::Empty), None);
-      }
+      app.back_out_of_home();
     }
     _ => {
       app.set_current_route_state(Some(ActiveBlock::Empty), None);

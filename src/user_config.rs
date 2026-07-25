@@ -109,6 +109,8 @@ fn parse_key(key: String) -> Result<Key> {
         "pageup" => Ok(Key::PageUp),
         "pagedown" => Ok(Key::PageDown),
         "space" => Ok(Key::Char(' ')),
+        "enter" | "return" => Ok(Key::Enter),
+        "tab" => Ok(Key::Tab),
         _ => Err(anyhow!("The key \"{}\" is unknown.", sections[0])),
       }
     }
@@ -576,6 +578,13 @@ mod tests {
     assert_eq!(parse_key(String::from("-")).unwrap(), Key::Char('-'));
     assert_eq!(parse_key(String::from("esc")).unwrap(), Key::Esc);
     assert_eq!(parse_key(String::from("del")).unwrap(), Key::Delete);
+    assert_eq!(parse_key(String::from("space")).unwrap(), Key::Char(' '));
+    // `submit` defaults to Enter, so the config has to be able to say so.
+    assert_eq!(parse_key(String::from("enter")).unwrap(), Key::Enter);
+    assert_eq!(parse_key(String::from("Enter")).unwrap(), Key::Enter);
+    assert_eq!(parse_key(String::from("return")).unwrap(), Key::Enter);
+    assert_eq!(parse_key(String::from("tab")).unwrap(), Key::Tab);
+    assert!(parse_key(String::from("wat")).is_err());
   }
 
   #[test]

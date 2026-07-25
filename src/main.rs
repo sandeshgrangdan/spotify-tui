@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod event;
 mod handlers;
+mod home_sections;
 mod network;
 mod redirect_uri;
 mod ui;
@@ -301,26 +302,28 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
     };
 
     let current_route = app.get_current_route();
-    terminal.draw(|f| match current_route.active_block {
-      ActiveBlock::HelpMenu => {
-        ui::draw_help_menu(f, &app);
+    terminal.draw(|f| {
+      match current_route.active_block {
+        ActiveBlock::HelpMenu => {
+          ui::draw_help_menu(f, &app);
+        }
+        ActiveBlock::SelectDevice => {
+          ui::draw_device_list(f, &app);
+        }
+        ActiveBlock::Analysis => {
+          ui::audio_analysis::draw(f, &app);
+        }
+        ActiveBlock::BasicView => {
+          ui::draw_basic_view(f, &app);
+        }
+        _ => {
+          ui::draw_main_layout(f, &app);
+        }
       }
-      ActiveBlock::Error => {
-        ui::draw_error_screen(f, &app);
-      }
-      ActiveBlock::SelectDevice => {
-        ui::draw_device_list(f, &app);
-      }
-      ActiveBlock::Analysis => {
-        ui::audio_analysis::draw(f, &app);
-      }
-      ActiveBlock::BasicView => {
-        ui::draw_basic_view(f, &app);
-      }
-      _ => {
-        ui::draw_main_layout(f, &app);
-      }
+      // Overlays every view, so an error is visible wherever the user is.
+      ui::draw_toast(f, &app);
     })?;
+
 
     if current_route.active_block == ActiveBlock::Input {
       terminal.show_cursor()?;
@@ -359,13 +362,18 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
           handlers::input_handler(key, &mut app);
         } else if key == app.user_config.keys.back {
           if app.get_current_route().active_block != ActiveBlock::Input {
-            // Go back through the navigation stack when not in search input
-            // mode. Reaching the root route is a no-op — only Ctrl+C
-            // terminates the app.
-            if let Some(ref x) = app.pop_navigation_stack() {
-              if x.id == RouteId::Search {
-                // Skip the intermediate Search route on the way back.
-                app.pop_navigation_stack();
+            // On the home screen, back steps out of the entered section the
+            // way `Esc` does. Home is the root route, so popping the stack
+            // there would do nothing at all.
+            if !app.back_out_of_home() {
+              // Go back through the navigation stack when not in search input
+              // mode. Reaching the root route is a no-op — only Ctrl+C
+              // terminates the app.
+              if let Some(ref x) = app.pop_navigation_stack() {
+                if x.id == RouteId::Search {
+                  // Skip the intermediate Search route on the way back.
+                  app.pop_navigation_stack();
+                }
               }
             }
           }
@@ -385,8 +393,11 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
       app.dispatch(IoEvent::GetUser);
       app.dispatch(IoEvent::GetCurrentPlayback);
       app.dispatch(IoEvent::GetRecentlyPlayed);
-      app.dispatch(IoEvent::GetDevices);
+      // Fills the sidebar's device list without hijacking the first screen.
+      app.dispatch(IoEvent::GetDevices(false));
       app.dispatch(IoEvent::GetTopArtists);
+      // Feeds the home screen's "On Repeat" card.
+      app.dispatch(IoEvent::GetOnRepeatTracks);
       app.get_made_for_you();
       app.help_docs_size = ui::help::get_help_docs(&app.user_config.keys).len() as u32;
 

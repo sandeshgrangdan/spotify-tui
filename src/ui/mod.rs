@@ -3,9 +3,10 @@ pub mod help;
 pub mod util;
 use super::app::{
   ActiveBlock, AlbumListContext, AlbumTableContext, App, ArtistBlock, EpisodeTableContext,
-  HomeBlock, HomeMode, InputMode, RecommendationsContext, RouteId, SearchResultBlock,
-  TrackTableContext, LIBRARY_OPTIONS,
+  HomeMode, InputMode, RecommendationsContext, RouteId, SearchResultBlock, TrackTableContext,
+  LIBRARY_OPTIONS,
 };
+use crate::home_sections;
 use help::get_help_docs;
 use rspotify::model::ResumePoint;
 use rspotify::model::PlayableItem;
@@ -374,7 +375,6 @@ pub fn draw_routes(f: &mut Frame, app: &App, layout_chunk: Rect)
     RouteId::Recommendations => {
       draw_recommendations_table(f, app, content_area);
     }
-    RouteId::Error => {} // This is handled as a "full screen" route in main.rs
     RouteId::SelectedDevice => {} // This is handled as a "full screen" route in main.rs
     RouteId::Analysis => {} // This is handled as a "full screen" route in main.rs
     RouteId::BasicView => {} // This is handled as a "full screen" route in main.rs
@@ -428,6 +428,41 @@ pub fn draw_playlist_block(f: &mut Frame, app: &App, layout_chunk: Rect)
   );
 }
 
+/// Rows for the sidebar's Devices pane.
+///
+/// `●` marks the device playback is *actually* on, taken from the polled
+/// playback context rather than the `is_active` flags baked into the cached
+/// device list: that list is only re-fetched on `d`, so it used to keep the dot
+/// on the previous device after switching, while the playbar showed the new one.
+///
+/// The marker leads the row rather than trailing it — the sidebar is ~26 columns
+/// and "Sandesh Grangdan MacBook Pro" alone overflows that, so a trailing dot
+/// was clipped away on exactly the devices whose names are long.
+fn device_rows(app: &App) -> Vec<String> {
+  let active_id = app
+    .current_playback_context
+    .as_ref()
+    .and_then(|context| context.device.id.as_deref());
+
+  match app.devices.as_ref() {
+    None => vec!["Press d to load…".to_owned()],
+    Some(payload) if payload.devices.is_empty() => vec!["No devices found".to_owned()],
+    Some(payload) => payload
+      .devices
+      .iter()
+      .map(|device| {
+        let is_active = match active_id {
+          Some(active) => device.id.as_deref() == Some(active),
+          // Nothing is playing, so there is no context to trust — fall back to
+          // whatever the device list itself claimed.
+          None => device.is_active,
+        };
+        format!("{} {}", if is_active { "●" } else { " " }, device.name)
+      })
+      .collect(),
+  }
+}
+
 pub fn draw_devices_block(f: &mut Frame, app: &App, layout_chunk: Rect)
 {
   let current_route = app.get_current_route();
@@ -436,23 +471,7 @@ pub fn draw_devices_block(f: &mut Frame, app: &App, layout_chunk: Rect)
     current_route.hovered_block == ActiveBlock::Devices,
   );
 
-  let device_items: Vec<String> = app
-    .devices
-    .as_ref()
-    .map(|d| {
-      if d.devices.is_empty() {
-        vec!["No devices found".to_owned()]
-      } else {
-        d.devices
-          .iter()
-          .map(|dev| {
-            let active = if dev.is_active { " ●" } else { "" };
-            format!("{}{}", dev.name, active)
-          })
-          .collect()
-      }
-    })
-    .unwrap_or_else(|| vec!["Press d to load…".to_owned()]);
+  let device_items = device_rows(app);
 
   draw_selectable_list(
     f,
@@ -1164,6 +1183,8 @@ pub fn draw_recommendations_table(f: &mut Frame, app: &App, layout_chunk: Rect)
       "Recommendations based on Artist \'{}\'",
       &app.recommendations_seed
     ),
+    // A mix's name already says what it is.
+    Some(RecommendationsContext::Mix) => app.recommendations_seed.clone(),
     None => "Recommendations".to_string(),
   };
   draw_table(
@@ -1439,99 +1460,177 @@ pub fn draw_playbar(f: &mut Frame, app: &App, layout_chunk: Rect)
   f.render_widget(song_progress, chunks[2]);
 }
 
-pub fn draw_error_screen(f: &mut Frame, app: &App)
-{
-  let chunks = Layout::default()
-    .direction(Direction::Vertical)
-    .constraints([Constraint::Percentage(100)].as_ref())
-    .margin(5)
-    .split(f.area());
+/// Transient error notification in the top-right corner.
+///
+/// Errors used to push a full-screen route that sat there until dismissed; a
+/// 403 from a command that no longer applies doesn't deserve that. The toast
+/// overlays whatever is on screen and clears itself after a few seconds
+/// (`Toast::LIFETIME`), so nothing has to be acknowledged.
+pub fn draw_toast(f: &mut Frame, app: &App) {
+  let toast = match &app.toast {
+    Some(toast) => toast,
+    None => return,
+  };
+  let area = f.area();
+  let text_width = 60.min(area.width.saturating_sub(6) as usize);
+  if text_width < 12 || area.height < 6 {
+    return;
+  }
 
-  let playing_text = vec![
-    Line::from(vec![
-      Span::raw("Api response: "),
-      Span::styled(
-        &app.api_error,
+  let mut lines: Vec<Line> = util::wrap_text(&toast.message, text_width, 3)
+    .into_iter()
+    .map(|line| {
+      Line::from(Span::styled(
+        format!(" {}", line),
         Style::default().fg(app.user_config.theme.error_text),
-      ),
-    ]),
-    Line::from(Span::styled(
-      "If you are trying to play a track, please check that",
-      Style::default().fg(app.user_config.theme.text),
-    )),
-    Line::from(Span::styled(
-      " 1. You have a Spotify Premium Account",
-      Style::default().fg(app.user_config.theme.text),
-    )),
-    Line::from(Span::styled(
-      " 2. Your playback device is active and selected - press `d` to go to device selection menu",
-      Style::default().fg(app.user_config.theme.text),
-    )),
-    Line::from(Span::styled(
-      " 3. If you're using spotifyd as a playback device, your device name must not contain spaces",
-      Style::default().fg(app.user_config.theme.text),
-    )),
-    Line::from(Span::styled("Hint: a playback device must be either an official spotify client or a light weight alternative such as spotifyd",
-        Style::default().fg(app.user_config.theme.hint)
-        ),
-    ),
-    Line::from(
-      Span::styled(
-          "\nPress <Esc> to return",
-          Style::default().fg(app.user_config.theme.inactive),
-      ),
-    )
-  ];
+      ))
+    })
+    .collect();
+  if lines.is_empty() {
+    return;
+  }
+  if let Some(hint) = toast.hint {
+    lines.extend(
+      util::wrap_text(hint, text_width, 2)
+        .into_iter()
+        .map(|line| {
+          Line::from(Span::styled(
+            format!(" {}", line),
+            Style::default().fg(app.user_config.theme.inactive),
+          ))
+        }),
+    );
+  }
 
-  let playing_paragraph = Paragraph::new(playing_text)
-    .wrap(Wrap { trim: true })
-    .style(Style::default().fg(app.user_config.theme.text))
-    .block(
+  let width = lines
+    .iter()
+    .map(|line| line.width())
+    .max()
+    .unwrap_or(0)
+    .saturating_add(3) as u16;
+  let height = lines.len() as u16 + 2;
+  let rect = Rect {
+    x: area.width.saturating_sub(width + 1),
+    // One row down from the top edge, so it reads as floating above the view.
+    y: if area.height > height + 1 { 1 } else { 0 },
+    width: width.min(area.width),
+    height: height.min(area.height),
+  };
+
+  f.render_widget(Clear, rect);
+  f.render_widget(
+    Paragraph::new(Text::from(lines)).block(
       Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Thick)
         .title(Span::styled(
-          "Error",
+          " Error ",
           Style::default()
             .fg(app.user_config.theme.error_border)
             .add_modifier(Modifier::BOLD),
         ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(app.user_config.theme.error_border)),
-    );
-  f.render_widget(playing_paragraph, chunks[0]);
+    ),
+    rect,
+  );
 }
 
-fn draw_home(f: &mut Frame, app: &App, layout_chunk: Rect)
-{
+fn draw_home(f: &mut Frame, app: &App, layout_chunk: Rect) {
+  let sections = home_sections::sections(app);
+  let selected_section = sections
+    .iter()
+    .position(|section| section.block == app.home_selected_block)
+    .unwrap_or(0);
+
+  // 4 rows: a border plus the greeting's two lines.
+  let chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Length(4), Constraint::Min(0)].as_ref())
+    .split(layout_chunk);
+
+  draw_home_greeting(f, app, chunks[0], selected_section, sections.len());
+
+  if sections.is_empty() || chunks[1].height == 0 {
+    return;
+  }
+  let rows = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints(
+      sections
+        .iter()
+        .map(|_| Constraint::Ratio(1, sections.len() as u32))
+        .collect::<Vec<Constraint>>(),
+    )
+    .split(chunks[1]);
+
+  for (index, section) in sections.iter().enumerate() {
+    let items: Vec<String> = section
+      .items
+      .iter()
+      .map(|item| {
+        if item.subtitle.is_empty() {
+          item.title.clone()
+        } else {
+          format!("{}  ·  {}", item.title, item.subtitle)
+        }
+      })
+      .collect();
+    let selected = home_sections::item_index(app, section.block).min(items.len().saturating_sub(1));
+    draw_selectable_list(
+      f,
+      app,
+      rows[index],
+      &section.title,
+      &items,
+      get_home_highlight_state(app, section.block),
+      (!items.is_empty()).then_some(selected),
+    );
+  }
+}
+
+fn draw_home_greeting(
+  f: &mut Frame,
+  app: &App,
+  layout_chunk: Rect,
+  selected_section: usize,
+  section_count: usize,
+) {
   let display_name = app
     .user
     .as_ref()
     .and_then(|u| u.display_name.clone())
     .unwrap_or_else(|| "there".to_owned());
-
-  let chunks = Layout::default()
-    .direction(Direction::Vertical)
-    .constraints(
-      [
-        Constraint::Length(3),
-        Constraint::Percentage(36),
-        Constraint::Percentage(32),
-        Constraint::Percentage(32),
-      ]
-      .as_ref(),
+  let other_mode = match app.home_mode {
+    HomeMode::Music => "podcasts",
+    HomeMode::Podcast => "music",
+  };
+  let hint = if app.home_section_entered {
+    format!(
+      "j/k move · Enter plays · q/Esc back to sections · {} for {} · ? help",
+      app.user_config.keys.toggle_home_mode, other_mode
     )
-    .split(layout_chunk);
+  } else {
+    format!(
+      "j/k pick a section ({}/{}) · Enter opens it · {} for {} · ? help",
+      selected_section + 1,
+      section_count,
+      app.user_config.keys.toggle_home_mode,
+      other_mode
+    )
+  };
 
-  // Greeting / hint strip
-  let hint = Paragraph::new(Text::from(vec![
+  let greeting = Paragraph::new(Text::from(vec![
     Line::from(Span::styled(
-      format!("Hello, {} — what do you want to listen to today?", display_name),
+      format!(
+        "Hello, {} — what do you want to listen to today?",
+        display_name
+      ),
       Style::default()
         .fg(app.user_config.theme.banner)
         .add_modifier(Modifier::BOLD),
     )),
     Line::from(Span::styled(
-      "j/k move between & within · Enter opens · q goes back · ? help",
+      hint,
       Style::default().fg(app.user_config.theme.inactive),
     )),
   ]))
@@ -1542,277 +1641,7 @@ fn draw_home(f: &mut Frame, app: &App, layout_chunk: Rect)
       .border_type(BorderType::Rounded)
       .border_style(Style::default().fg(app.user_config.theme.banner)),
   );
-  f.render_widget(hint, chunks[0]);
-
-  if matches!(app.home_mode, HomeMode::Podcast) {
-    draw_home_podcast_sections(f, app, chunks.clone());
-    return;
-  }
-
-  // ── Made For You (top) — two-line rows: bold title + dim preview subtitle ──
-  let made_highlight_state = get_home_highlight_state(app, HomeBlock::MadeForYou);
-  let made_theme = app.user_config.theme;
-  let pairs = made_for_you_pairs(app);
-
-  let made_list_items: Vec<ListItem> = pairs
-    .iter()
-    .map(|(title, subtitle)| {
-      let title_line = Line::from(Span::styled(
-        title.clone(),
-        Style::default()
-          .fg(made_theme.text)
-          .add_modifier(Modifier::BOLD),
-      ));
-      let subtitle_line = Line::from(Span::styled(
-        subtitle.clone(),
-        Style::default().fg(made_theme.inactive),
-      ));
-      ListItem::new(Text::from(vec![title_line, subtitle_line]))
-    })
-    .collect();
-
-  let mut made_state = ListState::default();
-  if !pairs.is_empty() {
-    made_state.select(Some(
-      app.home_made_for_you_index.min(pairs.len() - 1),
-    ));
-  }
-
-  let made_list = List::new(made_list_items)
-    .block(
-      Block::default()
-        .title(Span::styled(
-          "Your Top Artists",
-          get_color(made_highlight_state, made_theme),
-        ))
-        .borders(Borders::ALL)
-        .border_type(get_border_type(made_highlight_state))
-        .border_style(get_color(made_highlight_state, made_theme)),
-    )
-    .style(Style::default().fg(made_theme.text))
-    .highlight_style(get_row_highlight_style(made_highlight_state, made_theme));
-  f.render_stateful_widget(made_list, chunks[1], &mut made_state);
-
-  // ── Recommended stations (middle) ── unique artists drawn from recently played
-  let recommended_items: Vec<String> = recommended_station_names(app);
-
-  draw_selectable_list(
-    f,
-    app,
-    chunks[2],
-    "Recommended stations",
-    &recommended_items,
-    get_home_highlight_state(app, HomeBlock::RecommendedStations),
-    Some(app.home_recommended_index),
-  );
-
-  // ── Jump back in (bottom) ──
-  let recently_items: Vec<String> = app
-    .recently_played
-    .result
-    .as_ref()
-    .map(|page| {
-      page
-        .items
-        .iter()
-        .map(|item| {
-          format!(
-            "{} — {}",
-            item.track.name,
-            create_artist_string(&item.track.artists)
-          )
-        })
-        .collect()
-    })
-    .unwrap_or_else(|| vec!["Loading recently played…".to_owned()]);
-
-  draw_selectable_list(
-    f,
-    app,
-    chunks[3],
-    "Jump back in",
-    &recently_items,
-    get_home_highlight_state(app, HomeBlock::JumpBackIn),
-    Some(app.home_jump_back_index),
-  );
-}
-
-fn draw_home_podcast_sections(
-  f: &mut Frame,
-  app: &App,
-  chunks: std::rc::Rc<[Rect]>,
-) {
-  // ── Your Shows (top) ──
-  let your_shows_rows: Vec<String> = match app.library.saved_shows.get_results(None) {
-    Some(page) if !page.items.is_empty() => page
-      .items
-      .iter()
-      .map(|s| format!("{}  ·  {}", s.show.name, s.show.publisher))
-      .collect(),
-    _ => vec!["No saved podcasts — open Library → Podcasts and save some".to_owned()],
-  };
-  draw_selectable_list(
-    f,
-    app,
-    chunks[1],
-    "Your Shows",
-    &your_shows_rows,
-    get_home_highlight_state(app, HomeBlock::YourShows),
-    Some(app.home_your_shows_index),
-  );
-
-  // ── Continue listening (middle) ──
-  let continue_episodes = continue_listening_for_render(app);
-  let continue_rows: Vec<String> = if continue_episodes.is_empty() {
-    vec!["Listen to an episode to see resume points here".to_owned()]
-  } else {
-    continue_episodes
-      .iter()
-      .map(|(show_name, episode)| {
-        let remaining_ms = episode.duration.num_milliseconds().saturating_sub(
-          episode
-            .resume_point
-            .as_ref()
-            .map(|rp| rp.resume_position.num_milliseconds())
-            .unwrap_or(0),
-        ) as u128;
-        let remaining = format!(
-          "{}:{:02} left",
-          remaining_ms / 60_000,
-          (remaining_ms % 60_000) / 1000
-        );
-        format!("{}  ·  {}  ·  {}", episode.name, show_name, remaining)
-      })
-      .collect()
-  };
-  draw_selectable_list(
-    f,
-    app,
-    chunks[2],
-    "Continue listening",
-    &continue_rows,
-    get_home_highlight_state(app, HomeBlock::ContinueListening),
-    Some(app.home_continue_listening_index),
-  );
-
-  // ── Episodes for you (bottom) ──
-  let efy_episodes = episodes_for_you_for_render(app);
-  let episodes_for_you_rows: Vec<String> = if efy_episodes.is_empty() {
-    vec!["No recent episodes — open Library → Podcasts to follow some shows".to_owned()]
-  } else {
-    efy_episodes
-      .iter()
-      .map(|(show_name, episode)| {
-        format!(
-          "{}  ·  {}  ·  {}",
-          episode.name, show_name, episode.release_date
-        )
-      })
-      .collect()
-  };
-  draw_selectable_list(
-    f,
-    app,
-    chunks[3],
-    "Episodes for you",
-    &episodes_for_you_rows,
-    get_home_highlight_state(app, HomeBlock::EpisodesForYou),
-    Some(app.home_episodes_for_you_index),
-  );
-}
-
-fn continue_listening_for_render(
-  app: &App,
-) -> Vec<(String, rspotify::model::SimplifiedEpisode)> {
-  let mut out = Vec::new();
-  if let Some(saved_page) = app.library.saved_shows.get_results(None) {
-    for saved in &saved_page.items {
-      let show_id = saved.show.id.id().to_string();
-      if let Some(episodes) = app.podcast_episodes_per_show.get(&show_id) {
-        for episode in episodes {
-          if let Some(rp) = &episode.resume_point {
-            if rp.resume_position.num_milliseconds() > 0 && !rp.fully_played {
-              out.push((saved.show.name.clone(), episode.clone()));
-            }
-          }
-        }
-      }
-    }
-  }
-  out.sort_by(|a, b| b.1.release_date.cmp(&a.1.release_date));
-  out.truncate(10);
-  out
-}
-
-fn episodes_for_you_for_render(
-  app: &App,
-) -> Vec<(String, rspotify::model::SimplifiedEpisode)> {
-  let mut out = Vec::new();
-  if let Some(saved_page) = app.library.saved_shows.get_results(None) {
-    for saved in &saved_page.items {
-      let show_id = saved.show.id.id().to_string();
-      if let Some(episodes) = app.podcast_episodes_per_show.get(&show_id) {
-        if let Some(first) = episodes.first() {
-          out.push((saved.show.name.clone(), first.clone()));
-        }
-      }
-    }
-  }
-  out.sort_by(|a, b| b.1.release_date.cmp(&a.1.release_date));
-  out.truncate(10);
-  out
-}
-
-fn made_for_you_pairs(app: &App) -> Vec<(String, String)> {
-  // Section repurposed: shows the user's TOP ARTISTS (from
-  // current_user_top_artists). Replaces the broken "Made For You" mix
-  // attempt — the public Spotify Web API doesn't expose personalised
-  // Daily Mixes for accounts that haven't auto-saved them.
-  if app.top_artists.is_empty() {
-    return vec![("Loading your top artists…".to_owned(), String::new())];
-  }
-  app
-    .top_artists
-    .iter()
-    .map(|artist| {
-      let genres = if artist.genres.is_empty() {
-        format!("{} followers", artist.followers.total)
-      } else {
-        artist.genres.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
-      };
-      (artist.name.clone(), genres)
-    })
-    .collect()
-}
-
-fn recommended_station_names(app: &App) -> Vec<String> {
-  match app.recently_played.result.as_ref() {
-    Some(page) => {
-      let mut seen: Vec<String> = Vec::new();
-      for item in &page.items {
-        for artist in &item.track.artists {
-          if !seen.iter().any(|n| n == &artist.name) {
-            seen.push(artist.name.clone());
-          }
-          if seen.len() >= 12 {
-            break;
-          }
-        }
-        if seen.len() >= 12 {
-          break;
-        }
-      }
-      if seen.is_empty() {
-        vec!["Listen to a few tracks to see stations…".to_owned()]
-      } else {
-        seen
-          .into_iter()
-          .map(|name| format!("{} Radio  ·  songs based on this artist", name))
-          .collect()
-      }
-    }
-    None => vec!["Loading…".to_owned()],
-  }
+  f.render_widget(greeting, layout_chunk);
 }
 
 fn draw_artist_albums(f: &mut Frame, app: &App, layout_chunk: Rect)
@@ -2592,4 +2421,223 @@ fn draw_table(
     )
     .style(Style::default().fg(app.user_config.theme.text));
   f.render_widget(table, layout_chunk);
+}
+
+#[cfg(test)]
+mod home_tests {
+  use super::*;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn render(width: u16, height: u16, app: &App) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+      .draw(|f| draw_home(f, app, Rect::new(0, 0, width, height)))
+      .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..height)
+      .map(|y| {
+        (0..width)
+          .map(|x| buffer[(x, y)].symbol())
+          .collect::<String>()
+      })
+      .collect::<Vec<String>>()
+      .join("\n")
+  }
+
+  #[test]
+  fn every_section_is_titled_and_the_hint_line_is_visible() {
+    let app = App::default();
+    let screen = render(110, 40, &app);
+    for title in [
+      "Made For You",
+      "Recommended Stations",
+      "Jump Back In",
+      "Your Top Artists",
+    ] {
+      assert!(screen.contains(title), "{} missing from:\n{}", title, screen);
+    }
+    // The greeting block is 4 rows so its second line isn't clipped.
+    assert!(screen.contains("Hello, there"), "{}", screen);
+    assert!(screen.contains("pick a section (1/4)"), "{}", screen);
+  }
+
+  #[test]
+  fn rendering_never_draws_outside_the_home_pane() {
+    // ratatui panics on out-of-bounds writes, so this covers the section
+    // layout maths at every size the pane can be given.
+    let mut app = App::default();
+    for height in 1u16..46 {
+      for width in [1u16, 20, 60, 110, 200] {
+        render(width, height, &app);
+      }
+    }
+    app.home_mode = crate::app::HomeMode::Podcast;
+    for height in [1u16, 8, 20, 40] {
+      render(80, height, &app);
+    }
+  }
+}
+
+#[cfg(test)]
+mod toast_tests {
+  use super::*;
+  use ratatui::{backend::TestBackend, Terminal};
+
+  fn render(width: u16, height: u16, app: &App) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+      .draw(|f| {
+        // Something underneath, to prove the toast overlays rather than replaces.
+        f.render_widget(
+          Paragraph::new("UNDERNEATH").block(Block::default().borders(Borders::ALL)),
+          Rect::new(0, 0, width, height),
+        );
+        draw_toast(f, app);
+      })
+      .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..height)
+      .map(|y| {
+        (0..width)
+          .map(|x| buffer[(x, y)].symbol())
+          .collect::<String>()
+      })
+      .collect()
+  }
+
+  fn app_with_error(message: &str) -> App {
+    let mut app = App::default();
+    app.handle_error(anyhow::anyhow!("{}", message));
+    app
+  }
+
+  #[test]
+  fn a_toast_sits_in_the_top_right_over_the_screen_behind_it() {
+    let app = app_with_error("http error: status code 403 Forbidden");
+    let screen = render(100, 20, &app);
+    let joined = screen.join("\n");
+
+    assert!(joined.contains("403 Forbidden"), "{}", joined);
+    assert!(joined.contains("Error"), "{}", joined);
+    // The 403 hint from the old error screen survives.
+    assert!(joined.contains("Premium"), "{}", joined);
+    // The view behind it is still drawn.
+    assert!(joined.contains("UNDERNEATH"), "{}", joined);
+    // Top-right: the message is near the top, right of centre.
+    let row = screen
+      .iter()
+      .position(|line| line.contains("403 Forbidden"))
+      .unwrap();
+    assert!(row < 5, "toast should hug the top, was row {}", row);
+    let column = screen[row].find("403").unwrap();
+    assert!(column > 50, "toast should hug the right, was column {}", column);
+  }
+
+  #[test]
+  fn no_toast_draws_nothing() {
+    let app = App::default();
+    let screen = render(100, 20, &app).join("\n");
+    assert!(!screen.contains("Error"), "{}", screen);
+  }
+
+  #[test]
+  fn a_toast_never_draws_outside_the_terminal() {
+    let app = app_with_error("http error: status code 403 Forbidden — a fairly long message here");
+    for width in 1u16..120 {
+      for height in 1u16..14 {
+        render(width, height, &app);
+      }
+    }
+  }
+}
+
+
+
+#[cfg(test)]
+mod device_rows_tests {
+  use super::*;
+  use rspotify::model::{
+    context::{Actions, CurrentPlaybackContext},
+    device::{Device, DevicePayload},
+    CurrentlyPlayingType, DeviceType, RepeatState,
+  };
+
+  fn device(id: &str, name: &str, is_active: bool) -> Device {
+    Device {
+      id: Some(id.to_owned()),
+      is_active,
+      is_private_session: false,
+      is_restricted: false,
+      name: name.to_owned(),
+      _type: DeviceType::Computer,
+      volume_percent: Some(100),
+    }
+  }
+
+  fn app_with(devices: Vec<Device>, playing_on: Option<Device>) -> App {
+    let mut app = App::default();
+    app.devices = Some(DevicePayload { devices });
+    app.current_playback_context = playing_on.map(|device| CurrentPlaybackContext {
+      device,
+      repeat_state: RepeatState::Off,
+      shuffle_state: false,
+      context: None,
+      timestamp: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+      progress: None,
+      is_playing: true,
+      item: None,
+      currently_playing_type: CurrentlyPlayingType::Track,
+      actions: Actions { disallows: vec![] },
+    });
+    app
+  }
+
+  #[test]
+  fn the_dot_follows_playback_not_the_stale_device_list() {
+    // The cached list still claims the Mac is active — it was fetched before
+    // the user switched to the phone.
+    let app = app_with(
+      vec![
+        device("mac", "MacBook Pro", true),
+        device("phone", "Pixel", false),
+      ],
+      Some(device("phone", "Pixel", true)),
+    );
+    assert_eq!(
+      device_rows(&app),
+      vec!["  MacBook Pro".to_owned(), "● Pixel".to_owned()]
+    );
+  }
+
+  #[test]
+  fn with_nothing_playing_the_cached_flags_are_all_there_is() {
+    let app = app_with(
+      vec![
+        device("mac", "MacBook Pro", true),
+        device("phone", "Pixel", false),
+      ],
+      None,
+    );
+    assert_eq!(
+      device_rows(&app),
+      vec!["● MacBook Pro".to_owned(), "  Pixel".to_owned()]
+    );
+  }
+
+  #[test]
+  fn playing_on_a_device_that_is_not_in_the_list_marks_nothing() {
+    let app = app_with(
+      vec![device("mac", "MacBook Pro", true)],
+      Some(device("web", "Web Player", true)),
+    );
+    assert_eq!(device_rows(&app), vec!["  MacBook Pro".to_owned()]);
+  }
+
+  #[test]
+  fn empty_and_unloaded_lists_explain_themselves() {
+    let mut app = App::default();
+    assert_eq!(device_rows(&app), vec!["Press d to load…".to_owned()]);
+    app.devices = Some(DevicePayload { devices: vec![] });
+    assert_eq!(device_rows(&app), vec!["No devices found".to_owned()]);
+  }
 }

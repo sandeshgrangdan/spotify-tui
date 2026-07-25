@@ -21,7 +21,9 @@ pub enum IoEvent {
   GetCurrentPlayback,
   RefreshAuthentication,
   GetPlaylists,
-  GetDevices,
+  /// `true` opens the device picker once the list arrives; `false` only
+  /// refreshes the sidebar's device list.
+  GetDevices(bool),
   GetSearchResults(String, Option<Country>),
   SetTracksToTable(Vec<FullTrack>),
   GetMadeForYouPlaylistTracks(String, u32),
@@ -58,6 +60,7 @@ pub enum IoEvent {
   UserUnfollowPlaylist(String, String),
   FetchMadeForYouPreview(String, Option<Country>),
   GetTopArtists,
+  GetOnRepeatTracks,
   GetAudioAnalysis(String),
   GetUser,
   ToggleSaveTrack(String),
@@ -157,7 +160,7 @@ impl Network {
   pub async fn handle_network_event(&mut self, io_event: IoEvent) {
         match io_event {
       IoEvent::GetUser => self.get_user().await,
-      IoEvent::GetDevices => self.get_devices().await,
+      IoEvent::GetDevices(open_picker) => self.get_devices(open_picker).await,
       IoEvent::GetCurrentPlayback => self.get_current_playback().await,
       IoEvent::RefreshAuthentication => self.refresh_authentication().await,
       IoEvent::GetPlaylists => self.get_current_user_playlists().await,
@@ -237,6 +240,7 @@ impl Network {
         self.fetch_made_for_you_preview(playlist_id, country).await
       }
       IoEvent::GetTopArtists => self.get_top_artists().await,
+      IoEvent::GetOnRepeatTracks => self.get_on_repeat_tracks().await,
       IoEvent::GetAudioAnalysis(uri) => self.get_audio_analysis(uri).await,
       IoEvent::ToggleSaveTrack(track_id) => self.toggle_save_track(track_id).await,
       IoEvent::GetRecommendationsForTrackId(id, country) => {
@@ -280,6 +284,11 @@ impl Network {
         duration_ms,
       } => self.fetch_lyrics(track_id, artist, track_name, album, duration_ms).await,
     }
+
+    // Every dispatch switches the loading hint on; this switches it off once
+    // the queue has drained. Without it the hint stayed on forever after the
+    // first request of the session.
+    self.app.lock().await.io_finished();
   }
 
   async fn handle_error(&mut self, e: anyhow::Error) {
@@ -299,14 +308,21 @@ impl Network {
     }
   }
 
-  async fn get_devices(&mut self) {
+  /// Fetch the available devices. Startup calls this only to fill the sidebar's
+  /// device list, so it must not steal the screen — the picker opens when the
+  /// user asks for it (`d`), or when no device has ever been chosen and
+  /// playback would otherwise have nowhere to go.
+  async fn get_devices(&mut self, open_picker: bool) {
+    let never_chosen = self.client_config.device_id.is_none();
     match self.spotify.device().await {
       Ok(devices) => {
         let mut app = self.app.lock().await;
-        app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
         if !devices.is_empty() {
           app.devices = Some(rspotify::model::DevicePayload { devices });
           app.selected_device_index = Some(0);
+        }
+        if open_picker || never_chosen {
+          app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
         }
       }
       Err(e) => {
@@ -800,9 +816,9 @@ impl Network {
 
     if let Err(e) = final_result {
       self.handle_error(anyhow!(e)).await;
-    } else {
-      self.get_current_playback().await;
     }
+    // Either way the local state is a guess now — take the server's word for it.
+    self.get_current_playback().await;
   }
 
   async fn seek(&mut self, position_ms: u32) {
@@ -847,6 +863,10 @@ impl Network {
   async fn pause_playback(&mut self) {
     if let Err(e) = self.spotify.pause_playback(self.client_config.device_id.as_deref()).await {
       self.handle_error(anyhow!(e)).await;
+      // The command failed, so the flag `toggle_playback` flipped locally is
+      // now wrong. Re-read the real state so the next keypress sends the right
+      // command instead of repeating this one.
+      self.get_current_playback().await;
     }
   }
 
@@ -1404,7 +1424,7 @@ impl Network {
   async fn get_top_artists(&mut self) {
     match self
       .spotify
-      .current_user_top_artists_manual(Some(TimeRange::MediumTerm), Some(10), Some(0))
+      .current_user_top_artists_manual(Some(TimeRange::MediumTerm), Some(50), Some(0))
       .await
     {
       Ok(page) => {
@@ -1413,6 +1433,27 @@ impl Network {
       }
       Err(e) => {
         self.handle_error(anyhow!("Top artists fetch failed: {}", e)).await;
+      }
+    }
+  }
+
+  /// Short-term top tracks, feeding the home screen's "On Repeat" card. Kept
+  /// separate from `get_top_tracks` so it can load at startup without
+  /// commandeering the track table.
+  async fn get_on_repeat_tracks(&mut self) {
+    match self
+      .spotify
+      .current_user_top_tracks_manual(Some(TimeRange::ShortTerm), Some(50), Some(0))
+      .await
+    {
+      Ok(page) => {
+        let mut app = self.app.lock().await;
+        app.on_repeat_tracks = page.items;
+      }
+      Err(e) => {
+        self
+          .handle_error(anyhow!("On Repeat fetch failed: {}", e))
+          .await;
       }
     }
   }

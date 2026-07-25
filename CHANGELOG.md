@@ -6,11 +6,17 @@
 
 ### Changed
 
+- API errors now appear as a small self-clearing toast in the top-right corner instead of a full-screen route that had to be dismissed. The toast overlays whatever you are doing, keeps the useful troubleshooting hint for 403/404 responses, and disappears after 5 seconds. The old error screen (and its `Error` route/block) is gone.
+- Startup no longer opens the device picker over the home screen. The device list is still fetched for the sidebar; the picker opens when you ask for it with `d`, or on a first run where no device has been chosen yet (playback needs one). Your saved choice in `client.yml` is what keeps it out of the way.
 - Fixed the search-input cursor sitting two rows above the box in the wide layout — it now accounts for the top bar.
 - The back key (`q`) no longer quits the app when there is nowhere left to go back to — it is now purely a navigation key. Only `Ctrl+c` terminates the TUI.
 
 ### Added
 
+- Podcast mode ("Your Shows", "Latest Episodes", "Continue Listening") is a browsable feed you can pick from. "Latest Episodes" merges recent episodes from every saved show newest-first, marks what you haven't played with a leading `●`, and shows `show · 3d ago · 1h 17m` (or the time left, once started). "Your Shows" counts unplayed episodes per show.
+- Home screen sections mirror the Spotify app's front page: "Made For \<you\>", "Recommended Stations", "Jump Back In" and "Your Top Artists", each a titled list of `Name  ·  detail` rows. `H`/`M`/`L` jump within a section, and the back key (`q`) now steps out of an entered section just like `Esc` instead of doing nothing.
+- "Made For \<you\>" mixes: Spotify's Daily Mixes are not reachable from the Web API (they are not in `current_user_playlists`), so the section builds the same thing from data that is available — up to six genre-clustered mixes of your top artists ("Rock Mix", "Nu Metal Mix", …), "On Repeat" (short-term top tracks), and any genuinely Spotify-owned playlist that is in your library (Discover Weekly / Release Radar / artist mixes). Opening a mix interleaves those artists' top tracks, and the track table is titled with the mix name.
+- "Recommended Stations" seeds each artist station with the artists closest to it by genre, so a station blends several artists and its "With …" subtitle names them. Stations now come from your top artists (50, up from 10) and followed artists as well as recently-played ones.
 - Playlist management: add selected track/episode to a playlist via a picker modal (`t`), create playlists (`N` in the playlist pane), remove tracks from playlists you own (`D`)
 - "New Releases" library row backed by the browse API, with pagination and `w` to save an album
 - "Top Tracks" library row showing your personal top tracks
@@ -24,6 +30,13 @@
 
 ### Fixed
 
+- `spt list …` and `spt search …` no longer panic. `handle_matches` read the `--device` argument unconditionally, but only `playback` and `play` define it, and clap panics when asked for an argument the parsed subcommand doesn't have.
+- `enter`, `return`, `tab` and `space` are now accepted in `keybindings` (`enter` still reports that it is reserved, rather than "unknown key").
+- The Help box no longer reads "Loading…" forever. `dispatch` switched the flag on and nothing ever switched it off, so the hint stuck after the session's first request; it is now driven by a count of in-flight requests and clears when the queue drains. Set `show_loading_indicator: false` in the config's `behavior` section to keep the box on "Type ?" permanently.
+- Podcast mode is no longer empty on the first `P`. Episode fetches were dispatched from `toggle_home_mode` against a saved-show list that was still in flight, so "Latest Episodes" and "Continue Listening" stayed blank until you toggled modes a second time. The fetch now tops up every tick while in podcast mode, once per show.
+- The sidebar's active-device dot follows playback again. It was read from the cached device list, which is only re-fetched at startup or on `d`, so after switching devices it stayed on the previous one while the playbar showed the new one. It now comes from the polled playback context, so it also keeps up when you switch from another Spotify app. The `●` moved to the front of the row as well — appended, it was clipped off by the narrow sidebar for any device whose name is long.
+- Pressing space to resume right after pausing works on the first press. Playback state was only re-polled every 5 seconds, so a second press inside that window re-sent the *same* command and Spotify answered 403 ("Restriction violated"), which surfaced as an error screen. The flag is now flipped locally as soon as the key is pressed, and a failed player command re-reads the real state so the next press is still correct (e.g. after pausing from your phone). The progress bar also stops immediately on pause instead of creeping on for a few seconds.
+- The audio-analysis key (`v`) is no longer a dead key: it always opens the view, including when nothing is playing or a video/local file is the current item. The view now says which of those it is — or, for a normal track, that Spotify removed `/audio-analysis` for third-party apps in November 2024 (the request returns 403) — across the whole screen instead of a clipped 5-row box beside an empty pitch chart.
 - Artist pages load again: the removed related-artists endpoint no longer kills the whole page
 - Home "Your Top Artists" section loads: the missing `user-top-read` OAuth scope was added (delete the token cache / re-auth to pick it up)
 - Search works again under the February 2026 API rules (limit capped at 10)

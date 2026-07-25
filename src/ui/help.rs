@@ -203,6 +203,26 @@ pub fn get_help_docs(key_bindings: &KeyBindings) -> Vec<Vec<String>> {
       String::from("Selected block"),
     ],
     vec![
+      String::from("Pick a section, then move within it"),
+      String::from("j|k"),
+      String::from("Home"),
+    ],
+    vec![
+      String::from("Enter the selected section / open the selected row"),
+      key_bindings.submit.to_string(),
+      String::from("Home"),
+    ],
+    vec![
+      String::from("Back out of a section"),
+      format!("<Esc> | {}", key_bindings.back),
+      String::from("Home"),
+    ],
+    vec![
+      String::from("Jump to first / middle / last row in a section"),
+      String::from("H|M|L"),
+      String::from("Home"),
+    ],
+    vec![
       String::from("Create a new playlist"),
       key_bindings.create_playlist.to_string(),
       String::from("Playlists"),

@@ -20,15 +20,17 @@ pub fn get_search_results_highlight_state(
   )
 }
 
+/// Only the section holding the cursor is highlighted, and it reads as *active*
+/// once the cursor has been moved inside it — before that it is merely hovered.
 pub fn get_home_highlight_state(app: &App, block_to_match: HomeBlock) -> (bool, bool) {
   let current_route = app.get_current_route();
   let on_home = current_route.active_block == ActiveBlock::Home
     || current_route.hovered_block == ActiveBlock::Home;
-  let column_match = app.home_selected_block == block_to_match;
+  let section_match = app.home_selected_block == block_to_match;
   let is_active = current_route.active_block == ActiveBlock::Home
-    && column_match
+    && section_match
     && app.home_section_entered;
-  let is_hovered = on_home && column_match && !is_active;
+  let is_hovered = on_home && section_match && !is_active;
   (is_active, is_hovered)
 }
 
@@ -80,6 +82,65 @@ pub fn get_row_highlight_style(
       .fg(theme.text)
       .add_modifier(Modifier::BOLD)
   }
+}
+
+/// Truncate to `width` characters, marking the cut. Counts characters, not
+/// bytes, so multi-byte titles aren't cut mid-character.
+pub fn truncate_text(text: &str, width: usize) -> String {
+  if width == 0 {
+    return String::new();
+  }
+  if text.chars().count() <= width {
+    return text.to_owned();
+  }
+  if width == 1 {
+    return "…".to_owned();
+  }
+  let mut out: String = text.chars().take(width - 1).collect();
+  out.push('…');
+  out
+}
+
+/// Word-wrap into at most `max_lines` rows of `width`, marking dropped text.
+pub fn wrap_text(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+  if width == 0 || max_lines == 0 {
+    return Vec::new();
+  }
+  let mut lines: Vec<String> = Vec::new();
+  let mut current = String::new();
+  for word in text.split_whitespace() {
+    let word = truncate_text(word, width);
+    if current.is_empty() {
+      current = word;
+    } else if current.chars().count() + 1 + word.chars().count() <= width {
+      current.push(' ');
+      current.push_str(&word);
+    } else {
+      lines.push(std::mem::take(&mut current));
+      if lines.len() == max_lines {
+        mark_truncated(&mut lines[max_lines - 1], width);
+        return lines;
+      }
+      current = word;
+    }
+  }
+  if !current.is_empty() {
+    if lines.len() < max_lines {
+      lines.push(current);
+    } else {
+      mark_truncated(&mut lines[max_lines - 1], width);
+    }
+  }
+  lines
+}
+
+fn mark_truncated(line: &mut String, width: usize) {
+  let mut chars: Vec<char> = line.chars().collect();
+  if chars.len() >= width && !chars.is_empty() {
+    chars.pop();
+  }
+  chars.push('…');
+  *line = chars.into_iter().collect();
 }
 
 pub fn create_artist_string(artists: &[SimplifiedArtist]) -> String {
@@ -189,6 +250,30 @@ mod tests {
     assert_eq!(search_cursor_position(120, 40, false, 0), (1, 1));
     // wide small terminal: top bar 2 + border 1 = row 3, column border only.
     assert_eq!(search_cursor_position(180, 40, false, 0), (1, 3));
+  }
+
+  #[test]
+  fn truncate_text_marks_the_cut_and_counts_characters() {
+    assert_eq!(truncate_text("status code 403", 40), "status code 403");
+    assert_eq!(truncate_text("status code 403", 8), "status …");
+    assert_eq!(truncate_text("abc", 1), "…");
+    assert_eq!(truncate_text("abc", 0), "");
+    // Cut on character boundaries, not bytes.
+    assert_eq!(truncate_text("Bjørk Guðmundsdóttir", 6), "Bjørk…");
+  }
+
+  #[test]
+  fn wrap_text_breaks_on_words_and_respects_the_budget() {
+    assert_eq!(
+      wrap_text("http error: status code 403 Forbidden", 14, 3),
+      vec!["http error:", "status code", "403 Forbidden"]
+    );
+    // Out of rows: the last one shows the cut.
+    assert_eq!(wrap_text("one two three four", 5, 2), vec!["one", "two…"]);
+    // A word longer than the row is clipped, not dropped.
+    assert_eq!(wrap_text("supercalifragilistic", 6, 1), vec!["super…"]);
+    assert!(wrap_text("anything", 10, 0).is_empty());
+    assert!(wrap_text("", 10, 2).is_empty());
   }
 
   #[test]

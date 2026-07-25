@@ -32,7 +32,7 @@ pub async fn handle_matches(
 ) -> Result<String> {
   let mut cli = CliApp::new(net, config);
 
-  cli.net.handle_network_event(IoEvent::GetDevices).await;
+  cli.net.handle_network_event(IoEvent::GetDevices(false)).await;
   cli
     .net
     .handle_network_event(IoEvent::GetCurrentPlayback)
@@ -56,8 +56,11 @@ pub async fn handle_matches(
     }
   }
 
-  if let Some(d) = matches.get_one::<String>("device").map(|s| s.as_str()) {
-    cli.set_device(d.to_string()).await?;
+  // `--device` is only defined on the playback/play subcommands. `get_one`
+  // panics when an arg isn't part of the parsed command, which took `spt list`
+  // and `spt search` down with it, so ask for it fallibly.
+  if let Ok(Some(device)) = matches.try_get_one::<String>("device") {
+    cli.set_device(device.clone()).await?;
   }
 
   // Evalute the subcommand

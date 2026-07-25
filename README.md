@@ -14,15 +14,17 @@
 
 A Spotify client for the terminal written in Rust.
 
-This fork is modernized for rspotify 0.16 / ratatui 0.29 and the post-2024 Spotify Web API, and adds:
+This fork is modernized for rspotify 0.16 / ratatui 0.29 and the post-2024 Spotify Web API. On top of upstream it adds:
 
-- **Home screen** with Music/Podcast modes: your top artists, recommended stations, jump back in, continue listening
-- **Synced lyrics** side panel (lrclib.net, LRC-synced with playback)
+- **Home screen** with Music and Podcast modes (`P` switches). Music lists *Made For \<you\>*, *Recommended Stations*, *Jump Back In* and *Your Top Artists*; podcasts list *Your Shows*, *Latest Episodes* and *Continue Listening*. See [The home screen](#the-home-screen).
+- **Mixes and stations built on the client**, because Spotify withdrew the endpoints that used to power them: genre-clustered "Daily Mix"-style mixes, *On Repeat*, and per-artist radio (`r`) assembled from artist top tracks
+- **A podcast feed you can pick from**: recent episodes across every saved show, newest first, with unplayed episodes marked and the time left on part-played ones
+- **Synced lyrics** side panel (`y`) from lrclib.net, scrolling with playback
 - **Queue view** (`Q`): see what's next, pop items, skip to a queue entry
 - **Playlist management**: add tracks/episodes to a playlist (`t`), create playlists (`N` in the playlist pane), remove tracks from your own playlists (`D`)
 - **New Releases** and personal **Top Tracks** rows in the library
 - **Episode search** alongside songs/artists/albums/playlists/podcasts
-- **Client-side radio** (`r`): stations built from artist top tracks (Spotify removed the recommendations endpoint for third-party apps)
+- **Errors as toasts**: a failed request shows a self-clearing note in the top-right instead of taking over the screen
 - Liked/followed icons synced across search results, artist and album pages
 - A working CLI (`spt playback/play/list/search`) against the current API
 
@@ -44,9 +46,13 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
       - [Scoop installer](#scoop-installer)
     - [Manual](#manual)
   - [Connecting to Spotify’s API](#connecting-to-spotifys-api)
+    - [Re-authenticating](#re-authenticating)
   - [Usage](#usage)
+    - [The home screen](#the-home-screen)
+    - [Command line](#command-line)
 - [Configuration](#configuration)
   - [Limitations](#limitations)
+    - [What the Spotify API no longer allows](#what-the-spotify-api-no-longer-allows)
   - [Using with spotifyd](#using-with-spotifyd)
   - [Libraries used](#libraries-used)
   - [Development](#development)
@@ -180,7 +186,9 @@ But here they are again:
 1. Click `Create an app`
     - You now can see your `Client ID` and `Client Secret`
 1. Now click `Edit Settings`
-1. Add `http://localhost:8888/callback` to the Redirect URIs
+1. Add `http://127.0.0.1:8888/callback` to the Redirect URIs
+    - It must be `127.0.0.1`, not `localhost` — Spotify no longer accepts `localhost`, and this is the address `spt` listens on
+    - If you pick a custom port below, use the same port here
 1. Scroll down and click `Save`
 1. You are now ready to authenticate with Spotify!
 1. Go back to the terminal
@@ -191,9 +199,32 @@ But here they are again:
 1. You will be redirected to an official Spotify webpage to ask you for permissions.
 1. After accepting the permissions, you'll be redirected to localhost. If all goes well, the redirect URL will be parsed automatically and now you're done. If the local webserver fails for some reason you'll be redirected to a blank webpage that might say something like "Connection Refused" since no server is running. Regardless, copy the URL and paste into the prompt in the terminal.
 
+On first run `spt` asks which device to play on, because the Web API cannot
+start playback without one. That choice is written to `client.yml`, so later
+starts go straight to the home screen — press `d` whenever you want to switch
+devices, and the sidebar's Devices pane marks the current one with `●`.
+
 And now you are ready to use the `spotify-tui` 🎉
 
 You can edit the config at anytime at `${HOME}/.config/spotify-tui/client.yml`. (for snap `${HOME}/snap/spt/current/.config/spotify-tui/client.yml`)
+
+### Re-authenticating
+
+Two files sit side by side in that directory:
+
+| File | Holds |
+| --- | --- |
+| `client.yml` | client id and secret, the redirect port, and the last device you played on |
+| `.spotify_token_cache.json` | the OAuth token, including the permissions it was granted |
+
+The permissions are baked into the cached token, so a build that asks Spotify for
+a new permission cannot use an older token. If a feature starts reporting a 403
+that looks like a missing permission, delete the cache and run `spt` again to log
+in fresh:
+
+```bash
+rm ~/.config/spotify-tui/.spotify_token_cache.json
+```
 
 ## Usage
 
@@ -202,10 +233,51 @@ The binary is named `spt`.
 Running `spt` with no arguments will bring up the UI. Press `?` to bring up a help menu that shows currently implemented key events and their actions.
 There is also a CLI that is able to do most of the stuff the UI does. Use `spt --help` to learn more.
 
+### The home screen
+
+`spt` opens on a home screen of sections, each one a list you can walk through:
+
+| Mode | Sections |
+| --- | --- |
+| Music | *Made For \<you\>* · *Recommended Stations* · *Jump Back In* · *Your Top Artists* |
+| Podcasts (`P`) | *Your Shows* · *Latest Episodes* · *Continue Listening* |
+
+Moving around is two-level, so `j`/`k` never has to mean both "next section" and
+"next row":
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` | pick a section — and once you are inside one, move through its rows |
+| `Enter` | step into the selected section, then open or play the selected row |
+| `Esc` or `q` | step back out of a section, then out to the sidebar |
+| `h` | leave for the library sidebar |
+| `H` / `M` / `L` | jump to the first / middle / last row of a section |
+| `P` | switch between Music and Podcast modes |
+
+What `Enter` opens, section by section:
+
+- **Made For \<you\>** — a mix, in the track table. Mixes are genre clusters of
+  your top artists ("Rock Mix", "Nu Metal Mix"), plus **On Repeat** (your
+  short-term top tracks) and any Spotify-owned playlist that really is in your
+  library (Discover Weekly, Release Radar, artist mixes).
+- **Recommended Stations** — an artist station. Each one blends in the artists
+  closest to the seed by genre, which is what the "With …" subtitle names.
+- **Jump Back In** — your listening history, played from that track on.
+- **Your Top Artists** — the artist page.
+- **Your Shows** — that show's episode list.
+- **Latest Episodes** — plays the episode. A leading `●` marks episodes you have
+  not played; rows read `show · 3d ago · 1h 17m`, or `… · 24m left` once started.
+- **Continue Listening** — resumes a part-played episode.
+
+Two things to know about the rest of the UI: errors appear as a small toast in
+the top-right for a few seconds and leave the screen you are on alone, and the
+sidebar's Devices pane marks the device playback is on with `●` (press `d` to
+switch).
+
+### Command line
+
 Here are some example to get you excited.
 ```
-spt --completions zsh # Prints shell completions for zsh to stdout (bash, power-shell and more are supported)
-
 spt play --name "Your Playlist" --playlist --random # Plays a random song from "Your Playlist"
 spt play --name "A cool song" --track # Plays 'A cool song'
 
@@ -232,9 +304,9 @@ The following is a sample config.yml file:
 theme:
   active: Cyan # current playing song in list
   banner: LightCyan # the "spotify-tui" banner on launch
-  error_border: Red # error dialog border
-  error_text: LightRed # error message text (e.g. "Spotify API reported error 404")
-  hint: Yellow # hint text in errors
+  error_border: Red # border of the error toast
+  error_text: LightRed # error message text in the toast (e.g. "status code 403 Forbidden")
+  hint: Yellow # the "Loading…" indicator
   hovered: Magenta # hovered pane border
   inactive: Gray # borders of inactive panes
   playbar_background: Black # background of progress bar
@@ -252,7 +324,9 @@ behavior:
   tick_rate_milliseconds: 250
   # Enable text emphasis (typically italic/bold text styling). Disabling this might be important if the terminal config is otherwise restricted and rendering text escapes interferes with the UI.
   enable_text_emphasis: true
-  # Controls whether to show a loading indicator in the top right of the UI whenever communicating with Spotify API
+  # Controls whether to show a loading indicator in the top right of the UI
+  # whenever communicating with Spotify API. Set to false to keep that box on
+  # "Type ?" permanently.
   show_loading_indicator: true
   # Disables the responsive layout that makes the search bar smaller on bigger
   # screens and enforces a wide search bar
@@ -269,19 +343,36 @@ behavior:
   # Sets the window title to "spt - Spotify TUI" via ANSI escape code.
   set_window_title: true
 
+# Every binding below is listed with its default, so you only need to include
+# the ones you want to change.
 keybindings:
   # Key stroke can be used if it only uses two keys:
   # ctrl-q works,
   # ctrl-alt-q doesn't.
-  back: "ctrl-q"
+  #
+  # These are reserved for navigation and cannot be remapped, so `spt` refuses
+  # to start if a binding claims one: h j k l H M L, the arrow keys, Backspace
+  # and Enter. That also means `submit` (Enter by default) is effectively fixed.
+  back: "q"
 
   jump_to_album: "a"
 
   # Shift modifiers use a capital letter (also applies with other modifier keys
   # like ctrl-A)
   jump_to_artist_album: "A"
+  jump_to_context: "o"
+
+  next_page: "ctrl-d"
+  previous_page: "ctrl-u"
+  jump_to_start: "ctrl-a"
+  jump_to_end: "ctrl-e"
 
   manage_devices: "d"
+  manage_queue: "Q"
+  toggle_lyrics: "y"
+  # Switches the home screen between Music and Podcast sections
+  toggle_home_mode: "P"
+
   decrease_volume: "-"
   increase_volume: "+"
   toggle_playback: " "
@@ -289,16 +380,20 @@ keybindings:
   seek_forwards: ">"
   next_track: "n"
   previous_track: "p"
+  shuffle: "ctrl-s"
+  repeat: "ctrl-r"
+
   copy_song_url: "c"
   copy_album_url: "C"
   help: "?"
-  shuffle: "ctrl-s"
-  repeat: "r"
   search: "/"
   audio_analysis: "v"
-  jump_to_context: "o"
   basic_view: "B"
   add_item_to_queue: "z"
+  # Opens the playlist picker for the selected track or episode
+  add_to_playlist: "t"
+  # Creates a playlist, from the playlist pane
+  create_playlist: "N"
 ```
 
 ## Limitations
@@ -306,6 +401,25 @@ keybindings:
 This app uses the [Web API](https://developer.spotify.com/documentation/web-api/) from Spotify, which doesn't handle streaming itself. So you'll need either an official Spotify client open or a lighter weight alternative such as [spotifyd](https://github.com/Spotifyd/spotifyd).
 
 If you want to play tracks, Spotify requires that you have a Premium account.
+Without one the player endpoints answer `403`, and the toast in the corner will
+say so.
+
+### What the Spotify API no longer allows
+
+Spotify withdrew several endpoints from third-party apps in November 2024, and
+changed more in February 2026. These are not bugs in `spt` and no version of it
+can bring the data back — this is how the app works around them:
+
+| No longer available | What `spt` does instead |
+| --- | --- |
+| `/recommendations` | Stations and mixes are assembled on the client from artist top tracks — the `r` key, and the home screen's mixes |
+| Daily Mix / Discover Weekly as a browsable list | Spotify's own mixes are not returned by `current_user_playlists`, so personal mixes are built from genre clusters of your top artists. Spotify-owned playlists still appear when they really are in your library |
+| `/artists/{id}/related-artists` | The artist page loads without its related-artists pane; station blends use genre overlap across your own artists instead |
+| `/audio-analysis` and `/audio-features` | The analysis view (`v`) says the request is refused with `403` rather than drawing an empty chart |
+| Search `limit` above 10 | Search requests are clamped to 10 results per page |
+
+There is also no saved-*episodes* endpoint available to this client, so the
+podcast sections are built from your saved **shows** and their recent episodes.
 
 ## Using with [spotifyd](https://github.com/Spotifyd/spotifyd)
 
@@ -483,10 +597,12 @@ The goal is to eventually implement almost every Spotify feature.
 
 ### High-level requirements yet to be implemented
 
-- Add songs to a playlist
 - Be able to scroll through result pages in every view
 
-This table shows all that is possible with the Spotify API, what is implemented already, and whether that is essential.
+The table below is inherited from upstream and predates the API withdrawals
+described in [Limitations](#what-the-spotify-api-no-longer-allows) — some rows
+marked "Yes" (`artist_related_artists`, audio analysis) describe endpoints
+Spotify has since closed to third-party apps.
 
 | API method                                        | Implemented yet? | Explanation                                                                                                                                                  | Essential? |
 | ------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |

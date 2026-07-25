@@ -20,7 +20,7 @@ use std::sync::mpsc::Sender;
 use std::{
   cmp::{max, min},
   collections::{HashMap, HashSet},
-  time::{Instant, SystemTime},
+  time::{Duration, Instant, SystemTime},
 };
 use ratatui::layout::Rect;
 
@@ -115,14 +115,17 @@ pub enum HomeMode {
   Podcast,
 }
 
+/// A shelf on the home screen. Music mode and podcast mode each own three or
+/// four of these; see `home_sections::sections` for the order they appear in.
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum HomeBlock {
   MadeForYou,
   RecommendedStations,
   JumpBackIn,
+  TopArtists,
   YourShows,
   ContinueListening,
-  EpisodesForYou,
+  LatestEpisodes,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -146,7 +149,6 @@ pub enum ActiveBlock {
   AlbumList,
   ArtistBlock,
   Empty,
-  Error,
   HelpMenu,
   Home,
   Input,
@@ -174,7 +176,6 @@ pub enum RouteId {
   AlbumList,
   Artist,
   BasicView,
-  Error,
   Home,
   RecentlyPlayed,
   Search,
@@ -232,6 +233,46 @@ pub enum AlbumListContext {
 pub enum RecommendationsContext {
   Artist,
   Song,
+  /// A home-screen mix, whose name is already descriptive ("Rock Mix").
+  Mix,
+}
+
+/// A transient corner notification.
+///
+/// Replaces the old full-screen error route: an API error is usually something
+/// the user can ignore (a 403 from a command that no longer applies), so it
+/// shouldn't take over the screen and wait to be dismissed.
+#[derive(Clone, Debug)]
+pub struct Toast {
+  pub message: String,
+  /// Short actionable line, kept from the troubleshooting text the old error
+  /// screen used to show.
+  pub hint: Option<&'static str>,
+  created_at: Instant,
+}
+
+impl Toast {
+  /// How long a toast stays on screen.
+  const LIFETIME: Duration = Duration::from_secs(5);
+
+  pub fn error(message: String) -> Self {
+    let hint = if message.contains("403") {
+      Some("Needs Premium and an active device (press d)")
+    } else if message.contains("404") {
+      Some("Device may be asleep — press d to re-select")
+    } else {
+      None
+    };
+    Toast {
+      message,
+      hint,
+      created_at: Instant::now(),
+    }
+  }
+
+  pub fn is_expired(&self) -> bool {
+    self.created_at.elapsed() >= Self::LIFETIME
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -307,25 +348,37 @@ pub struct App {
   navigation_stack: Vec<Route>,
   pub audio_analysis: Option<AudioAnalysis>,
   pub home_selected_block: HomeBlock,
+  /// False while the cursor picks a whole section, true once it moves inside
+  /// that section's list.
   pub home_section_entered: bool,
   pub home_jump_back_index: usize,
   pub home_made_for_you_index: usize,
   pub home_recommended_index: usize,
+  pub home_top_artists_index: usize,
   pub home_mode: HomeMode,
   pub podcast_episodes_per_show: HashMap<String, Vec<SimplifiedEpisode>>,
+  /// Shows whose episode fetch has already been dispatched. Without this the
+  /// per-tick top-up would re-request shows whose fetch is still in flight (or
+  /// failed silently) several times a second.
+  podcast_episodes_requested: HashSet<String>,
   pub home_your_shows_index: usize,
   pub home_continue_listening_index: usize,
-  pub home_episodes_for_you_index: usize,
+  pub home_latest_episodes_index: usize,
   pub podcast_home_fetched: bool,
   pub made_for_you_populated: bool,
   pub top_artists: Vec<FullArtist>,
+  /// Short-term top tracks — the app's "On Repeat".
+  pub on_repeat_tracks: Vec<FullTrack>,
   pub user_config: UserConfig,
   pub artists: Vec<FullArtist>,
   pub artist: Option<Artist>,
   pub album_table_context: AlbumTableContext,
   pub album_list_context: AlbumListContext,
   pub saved_album_tracks_index: usize,
+  /// Last API error, read by the CLI to decide a command failed.
   pub api_error: String,
+  /// Transient notification shown in the corner of the TUI.
+  pub toast: Option<Toast>,
   pub current_playback_context: Option<CurrentPlaybackContext>,
   pub queue: Option<CurrentUserQueue>,
   pub queue_selected_index: usize,
@@ -388,7 +441,11 @@ pub struct App {
   pub help_menu_page: u32,
   pub help_menu_max_lines: u32,
   pub help_menu_offset: u32,
+  /// Drives the "Loading…" hint. Derived from `pending_io`.
   pub is_loading: bool,
+  /// Dispatched IoEvents that haven't reported back yet. A plain flag flickered
+  /// off as soon as the *first* of several queued requests finished.
+  pending_io: usize,
   io_tx: Option<Sender<IoEvent>>,
   pub is_fetching_current_playback: bool,
   pub spotify_token_expiry: SystemTime,
@@ -420,14 +477,17 @@ impl Default for App {
       home_jump_back_index: 0,
       home_made_for_you_index: 0,
       home_recommended_index: 0,
+      home_top_artists_index: 0,
       home_mode: HomeMode::Music,
       podcast_episodes_per_show: HashMap::new(),
+      podcast_episodes_requested: HashSet::new(),
       home_your_shows_index: 0,
       home_continue_listening_index: 0,
-      home_episodes_for_you_index: 0,
+      home_latest_episodes_index: 0,
       podcast_home_fetched: false,
       made_for_you_populated: false,
       top_artists: Vec::new(),
+      on_repeat_tracks: Vec::new(),
       library: Library {
         saved_tracks: ScrollableResultPages::new(),
         made_for_you_playlists: ScrollableResultPages::new(),
@@ -446,6 +506,7 @@ impl Default for App {
       large_search_limit: 20,
       small_search_limit: 4,
       api_error: String::new(),
+      toast: None,
       current_playback_context: None,
       queue: None,
       queue_selected_index: 0,
@@ -503,6 +564,7 @@ impl Default for App {
       help_menu_max_lines: 0,
       help_menu_offset: 0,
       is_loading: false,
+      pending_io: 0,
       io_tx: None,
       is_fetching_current_playback: false,
       spotify_token_expiry: SystemTime::now(),
@@ -527,16 +589,25 @@ impl App {
   }
 
   // Send a network event to the network thread
+  /// Queue work for the network thread. `io_finished` is called for each event
+  /// once it has been handled, which is what turns the loading hint back off.
   pub fn dispatch(&mut self, action: IoEvent) {
-    // `is_loading` will be set to false again after the async action has finished in network.rs
+    self.pending_io += 1;
     self.is_loading = true;
     if let Some(io_tx) = &self.io_tx {
       if let Err(e) = io_tx.send(action) {
-        self.is_loading = false;
+        // Nothing will ever report back for this one.
+        self.io_finished();
         println!("Error from dispatch {}", e);
-        // TODO: handle error
       };
     }
+  }
+
+  /// One dispatched IoEvent has been handled. The loading hint clears only once
+  /// the whole queue has drained.
+  pub fn io_finished(&mut self) {
+    self.pending_io = self.pending_io.saturating_sub(1);
+    self.is_loading = self.pending_io > 0;
   }
 
   fn apply_seek(&mut self, seek_ms: u32) {
@@ -581,6 +652,12 @@ impl App {
 
   pub fn update_on_tick(&mut self) {
     self.poll_current_playback();
+    if matches!(self.home_mode, HomeMode::Podcast) {
+      self.fetch_missing_podcast_episodes();
+    }
+    if matches!(&self.toast, Some(toast) if toast.is_expired()) {
+      self.toast = None;
+    }
     if let Some(CurrentPlaybackContext {
       item: Some(item),
       progress,
@@ -684,6 +761,24 @@ impl App {
     });
   }
 
+  /// Step back out of the home screen one level: out of an entered section
+  /// first, then out to hover mode. Both `Esc` and the back key go through
+  /// here, so they can't drift apart.
+  ///
+  /// Returns true when it consumed the key, so the back key doesn't *also* pop
+  /// the navigation stack.
+  pub fn back_out_of_home(&mut self) -> bool {
+    if self.get_current_route().active_block != ActiveBlock::Home {
+      return false;
+    }
+    if self.home_section_entered {
+      self.home_section_entered = false;
+    } else {
+      self.set_current_route_state(Some(ActiveBlock::Empty), None);
+    }
+    true
+  }
+
   pub fn toggle_home_mode(&mut self) {
     self.home_mode = match self.home_mode {
       HomeMode::Music => HomeMode::Podcast,
@@ -704,26 +799,38 @@ impl App {
           self.dispatch(IoEvent::GetCurrentUserSavedShows(None));
         }
       }
-      // Always (re-)check per-show cache and dispatch fetches for shows we
-      // don't yet have episodes for. This handles new shows added mid-session.
-      let country = self.get_user_country();
-      let show_ids: Vec<String> = self
-        .library
-        .saved_shows
-        .get_results(None)
-        .map(|page| {
-          page
-            .items
-            .iter()
-            .map(|s| s.show.id.id().to_string())
-            .collect()
-        })
-        .unwrap_or_default();
-      for show_id in show_ids {
-        if !self.podcast_episodes_per_show.contains_key(&show_id) {
-          self.dispatch(IoEvent::FetchShowEpisodesForCache(show_id, country));
-        }
+      self.fetch_missing_podcast_episodes();
+    }
+  }
+
+  /// Dispatch episode fetches for saved shows we don't have episodes for yet.
+  ///
+  /// Called on entering podcast mode *and* every tick while there, because the
+  /// saved-show list is itself still in flight on the first entry — the old
+  /// eager loop ran against an empty list, which left "Latest Episodes" and
+  /// "Continue Listening" blank until the user toggled modes twice.
+  pub fn fetch_missing_podcast_episodes(&mut self) {
+    let country = self.get_user_country();
+    let show_ids: Vec<String> = self
+      .library
+      .saved_shows
+      .get_results(None)
+      .map(|page| {
+        page
+          .items
+          .iter()
+          .map(|s| s.show.id.id().to_string())
+          .collect()
+      })
+      .unwrap_or_default();
+    for show_id in show_ids {
+      if self.podcast_episodes_per_show.contains_key(&show_id)
+        || self.podcast_episodes_requested.contains(&show_id)
+      {
+        continue;
       }
+      self.podcast_episodes_requested.insert(show_id.clone());
+      self.dispatch(IoEvent::FetchShowEpisodesForCache(show_id, country));
     }
   }
 
@@ -813,21 +920,46 @@ impl App {
     }
   }
 
+  /// Report an API error as a toast rather than a screen the user has to
+  /// dismiss. The message is also kept in `api_error` because the CLI reads it
+  /// to decide whether a command failed.
   pub fn handle_error(&mut self, e: anyhow::Error) {
-    self.push_navigation_stack(RouteId::Error, ActiveBlock::Error);
-    self.api_error = e.to_string();
+    let message = e.to_string();
+    self.api_error = message.clone();
+    self.toast = Some(Toast::error(message));
   }
 
+  /// Pause or resume, and flip the local `is_playing` flag straight away.
+  ///
+  /// The real state is only re-polled every few seconds (`poll_current_playback`),
+  /// so without the local flip a second press inside that window repeats the
+  /// same command — and Spotify rejects pausing what is already paused with a
+  /// 403, which used to surface as an error screen.
   pub fn toggle_playback(&mut self) {
-    if let Some(CurrentPlaybackContext {
-      is_playing: true, ..
-    }) = &self.current_playback_context
-    {
+    let was_playing = self
+      .current_playback_context
+      .as_ref()
+      .map(|context| context.is_playing)
+      .unwrap_or(false);
+
+    if was_playing {
       self.dispatch(IoEvent::PausePlayback);
     } else {
       // When no offset or uris are passed, spotify will resume current playback
       self.dispatch(IoEvent::StartPlayback(None, None, None));
     }
+
+    let shown_progress = self.song_progress_ms;
+    if let Some(context) = &mut self.current_playback_context {
+      if was_playing {
+        // The progress bar is extrapolated from the last poll, so freeze it
+        // where the user can see it rather than letting it snap back.
+        context.progress = Some(chrono::TimeDelta::milliseconds(shown_progress as i64));
+      }
+      context.is_playing = !was_playing;
+    }
+    // Resume continues from `progress`, so restart the clock the bar counts from.
+    self.instant_since_last_current_playback_poll = Instant::now();
   }
 
   pub fn previous_track(&mut self) {
@@ -1432,27 +1564,30 @@ impl App {
     }
   }
 
+  /// Open the analysis view, and fetch analysis if a real track is playing.
+  ///
+  /// The view opens whatever is playing — including nothing at all — so the key
+  /// is never silently dead; the screen itself explains why data is missing
+  /// (podcast episode, video/local file, or Spotify's removal of the
+  /// `/audio-analysis` endpoint for third-party apps).
   pub fn get_audio_analysis(&mut self) {
-    if let Some(CurrentPlaybackContext {
-      item: Some(item), ..
-    }) = &self.current_playback_context
-    {
-      match item {
-        PlayableItem::Track(track) => {
-          if self.get_current_route().id != RouteId::Analysis {
-            let uri = track.id.as_ref().map(|i| i.uri()).unwrap_or_default();
-            self.dispatch(IoEvent::GetAudioAnalysis(uri));
-            self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
-          }
-        }
-        PlayableItem::Unknown(_) => {}
-        PlayableItem::Episode(_episode) => {
-          // No audio analysis available for podcast uris, so just default to the empty analysis
-          // view to avoid a 400 error code
-          self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
-        }
-      }
+    if self.get_current_route().id == RouteId::Analysis {
+      return;
     }
+    let track_uri = match &self.current_playback_context {
+      Some(CurrentPlaybackContext {
+        item: Some(PlayableItem::Track(track)),
+        ..
+      }) => track.id.as_ref().map(|id| id.uri()),
+      _ => None,
+    };
+    match track_uri {
+      Some(uri) => self.dispatch(IoEvent::GetAudioAnalysis(uri)),
+      // Nothing analysable is playing, so drop any stale data rather than
+      // showing the previous track's numbers under the current one.
+      None => self.audio_analysis = None,
+    }
+    self.push_navigation_stack(RouteId::Analysis, ActiveBlock::Analysis);
   }
 
   pub fn repeat(&mut self) {
@@ -1503,5 +1638,340 @@ mod app_tests {
     app.help_menu_page = 0;
     app.calculate_help_menu_offset(); // must not panic
     assert_eq!(app.help_menu_page, 0);
+  }
+}
+
+#[cfg(test)]
+mod analysis_key_tests {
+  use super::{App, RouteId};
+
+  #[test]
+  fn the_analysis_key_opens_the_view_even_with_nothing_playing() {
+    // Otherwise `v` is silently dead whenever playback is idle, which reads as
+    // a broken key rather than an unavailable API.
+    let mut app = App::default();
+    assert!(app.current_playback_context.is_none());
+
+    app.get_audio_analysis();
+    assert_eq!(app.get_current_route().id, RouteId::Analysis);
+  }
+
+  #[test]
+  fn the_analysis_key_does_not_stack_routes_when_already_open() {
+    let mut app = App::default();
+    app.get_audio_analysis();
+    app.get_audio_analysis();
+    assert_eq!(app.get_current_route().id, RouteId::Analysis);
+    app.pop_navigation_stack();
+    assert_eq!(app.get_current_route().id, RouteId::Home);
+  }
+}
+
+#[cfg(test)]
+mod playback_toggle_tests {
+  use super::*;
+  use rspotify::model::{
+    context::{Actions, CurrentPlaybackContext},
+    device::Device,
+    CurrentlyPlayingType, DeviceType, RepeatState,
+  };
+
+  fn app_with_playback(is_playing: bool) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel::<IoEvent>();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.current_playback_context = Some(CurrentPlaybackContext {
+      device: Device {
+        id: Some("device".to_owned()),
+        is_active: true,
+        is_private_session: false,
+        is_restricted: false,
+        name: "Test".to_owned(),
+        _type: DeviceType::Computer,
+        volume_percent: Some(50),
+      },
+      repeat_state: RepeatState::Off,
+      shuffle_state: false,
+      context: None,
+      timestamp: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+      progress: Some(chrono::TimeDelta::seconds(30)),
+      is_playing,
+      item: None,
+      currently_playing_type: CurrentlyPlayingType::Track,
+      actions: Actions { disallows: vec![] },
+    });
+    (app, rx)
+  }
+
+  #[test]
+  fn a_second_toggle_sends_the_opposite_command() {
+    // Playback state is only re-polled every few seconds. Without a local
+    // flip, the second press repeats the first command and Spotify answers
+    // 403 "Restriction violated".
+    let (mut app, rx) = app_with_playback(true);
+
+    app.toggle_playback();
+    assert!(
+      matches!(rx.try_recv(), Ok(IoEvent::PausePlayback)),
+      "first press should pause"
+    );
+
+    app.toggle_playback();
+    assert!(
+      matches!(rx.try_recv(), Ok(IoEvent::StartPlayback(None, None, None))),
+      "second press should resume, not pause again"
+    );
+  }
+
+  #[test]
+  fn toggling_updates_the_local_playing_flag_immediately() {
+    let (mut app, _rx) = app_with_playback(true);
+    app.toggle_playback();
+    assert_eq!(
+      app.current_playback_context.as_ref().map(|c| c.is_playing),
+      Some(false)
+    );
+    app.toggle_playback();
+    assert_eq!(
+      app.current_playback_context.as_ref().map(|c| c.is_playing),
+      Some(true)
+    );
+  }
+
+  #[test]
+  fn pausing_freezes_the_progress_where_it_is_shown() {
+    let (mut app, _rx) = app_with_playback(true);
+    // The bar has been extrapolated past the last poll's 30s.
+    app.song_progress_ms = 34_000;
+    app.toggle_playback();
+    let progress = app
+      .current_playback_context
+      .as_ref()
+      .and_then(|c| c.progress)
+      .map(|p| p.num_milliseconds());
+    assert_eq!(progress, Some(34_000), "progress must not jump backwards");
+  }
+
+  #[test]
+  fn toggling_without_a_playback_context_still_asks_to_play() {
+    let (tx, rx) = std::sync::mpsc::channel::<IoEvent>();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.toggle_playback();
+    assert!(matches!(
+      rx.try_recv(),
+      Ok(IoEvent::StartPlayback(None, None, None))
+    ));
+  }
+}
+
+#[cfg(test)]
+mod toast_tests {
+  use super::*;
+
+  fn aged_toast(message: &str, age: Duration) -> Toast {
+    let mut toast = Toast::error(message.to_owned());
+    toast.created_at = Instant::now().checked_sub(age).expect("clock too young");
+    toast
+  }
+
+  #[test]
+  fn an_error_becomes_a_toast_without_changing_the_route() {
+    let mut app = App::default();
+    let before = app.get_current_route().id.clone();
+
+    app.handle_error(anyhow!("http error: status code 403 Forbidden"));
+
+    let toast = app.toast.as_ref().expect("error should raise a toast");
+    assert!(toast.message.contains("403"));
+    // The whole point: the UI is not taken over.
+    assert_eq!(app.get_current_route().id, before);
+    // The CLI still reads the message from here.
+    assert!(app.api_error.contains("403"));
+  }
+
+  #[test]
+  fn a_403_keeps_the_troubleshooting_hint_from_the_old_error_screen() {
+    let toast = Toast::error("http error: status code 403 Forbidden".to_owned());
+    assert!(toast.hint.unwrap().contains("Premium"));
+
+    let toast = Toast::error("http error: status code 404 Not Found".to_owned());
+    assert!(toast.hint.unwrap().contains("asleep"));
+
+    // Anything else is shown as-is, with no invented advice.
+    let toast = Toast::error("json parse error: expected value".to_owned());
+    assert!(toast.hint.is_none());
+  }
+
+  #[test]
+  fn a_toast_clears_itself_on_a_later_tick() {
+    let mut app = App::default();
+    app.toast = Some(aged_toast("boom", Duration::from_secs(1)));
+    app.update_on_tick();
+    assert!(app.toast.is_some(), "a fresh toast must stay put");
+
+    app.toast = Some(aged_toast("boom", Toast::LIFETIME + Duration::from_secs(1)));
+    app.update_on_tick();
+    assert!(app.toast.is_none(), "an expired toast must clear itself");
+  }
+
+  #[test]
+  fn a_new_error_replaces_the_one_on_screen() {
+    let mut app = App::default();
+    app.handle_error(anyhow!("first"));
+    app.handle_error(anyhow!("second"));
+    assert_eq!(app.toast.as_ref().map(|t| t.message.as_str()), Some("second"));
+  }
+}
+
+#[cfg(test)]
+mod podcast_cache_tests {
+  use super::*;
+  use rspotify::model::{Page, Show, ShowId, SimplifiedShow};
+
+  #[allow(deprecated)]
+  fn saved_show(id: &str) -> Show {
+    Show {
+      added_at: String::new(),
+      show: SimplifiedShow {
+        available_markets: vec![],
+        copyrights: vec![],
+        description: String::new(),
+        explicit: false,
+        external_urls: Default::default(),
+        href: String::new(),
+        id: ShowId::from_id(format!("{:0>22}", id)).unwrap(),
+        images: vec![],
+        is_externally_hosted: Some(false),
+        languages: vec![],
+        media_type: "audio".to_owned(),
+        name: format!("Show {}", id),
+        publisher: String::new(),
+      },
+    }
+  }
+
+  fn app_with_shows(count: usize) -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel::<IoEvent>();
+    let mut app = App::new(tx, UserConfig::new(), SystemTime::now());
+    app.home_mode = HomeMode::Podcast;
+    let items: Vec<Show> = (0..count).map(|i| saved_show(&i.to_string())).collect();
+    let total = items.len() as u32;
+    app.library.saved_shows.pages.push(Page {
+      items,
+      href: String::new(),
+      limit: total.max(1),
+      next: None,
+      offset: 0,
+      previous: None,
+      total,
+    });
+    (app, rx)
+  }
+
+  fn episode_fetches(rx: &std::sync::mpsc::Receiver<IoEvent>) -> usize {
+    let mut count = 0;
+    while let Ok(event) = rx.try_recv() {
+      if matches!(event, IoEvent::FetchShowEpisodesForCache(_, _)) {
+        count += 1;
+      }
+    }
+    count
+  }
+
+  #[test]
+  fn each_saved_show_is_fetched_once_however_many_ticks_pass() {
+    // The top-up runs every tick while in podcast mode; without the requested
+    // set that would be several requests per show per second.
+    let (mut app, rx) = app_with_shows(3);
+
+    app.update_on_tick();
+    assert_eq!(episode_fetches(&rx), 3);
+
+    for _ in 0..5 {
+      app.update_on_tick();
+    }
+    assert_eq!(episode_fetches(&rx), 0, "shows must not be re-requested");
+  }
+
+  #[test]
+  fn shows_that_arrive_later_are_picked_up_without_toggling_modes() {
+    // The saved-show list is still in flight when podcast mode opens, which is
+    // why the eager one-shot fetch used to leave the episode sections empty.
+    let (mut app, rx) = app_with_shows(0);
+    app.update_on_tick();
+    assert_eq!(episode_fetches(&rx), 0);
+
+    app.library.saved_shows.pages.clear();
+    let (with_shows, _) = app_with_shows(2);
+    app.library.saved_shows = with_shows.library.saved_shows;
+
+    app.update_on_tick();
+    assert_eq!(episode_fetches(&rx), 2);
+  }
+
+  #[test]
+  fn music_mode_does_not_fetch_podcast_episodes() {
+    let (mut app, rx) = app_with_shows(2);
+    app.home_mode = HomeMode::Music;
+    app.update_on_tick();
+    assert_eq!(episode_fetches(&rx), 0);
+  }
+}
+
+#[cfg(test)]
+mod loading_hint_tests {
+  use super::*;
+
+  fn app() -> (App, std::sync::mpsc::Receiver<IoEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel::<IoEvent>();
+    (App::new(tx, UserConfig::new(), SystemTime::now()), rx)
+  }
+
+  #[test]
+  fn the_hint_clears_once_the_queue_drains() {
+    let (mut app, _rx) = app();
+    assert!(!app.is_loading, "nothing dispatched yet");
+
+    app.dispatch(IoEvent::GetUser);
+    assert!(app.is_loading);
+
+    app.io_finished();
+    assert!(!app.is_loading, "the hint used to stay on for the whole session");
+  }
+
+  #[test]
+  fn queued_requests_keep_the_hint_on_until_the_last_one_reports() {
+    let (mut app, _rx) = app();
+    app.dispatch(IoEvent::GetUser);
+    app.dispatch(IoEvent::GetPlaylists);
+    app.dispatch(IoEvent::GetDevices(false));
+
+    app.io_finished();
+    assert!(app.is_loading, "two requests are still in flight");
+    app.io_finished();
+    assert!(app.is_loading, "one request is still in flight");
+    app.io_finished();
+    assert!(!app.is_loading);
+  }
+
+  #[test]
+  fn extra_reports_cannot_underflow_the_counter() {
+    // The CLI drives `handle_network_event` directly, without dispatching.
+    let (mut app, _rx) = app();
+    app.io_finished();
+    app.io_finished();
+    assert!(!app.is_loading);
+
+    app.dispatch(IoEvent::GetUser);
+    assert!(app.is_loading, "the counter must not have gone negative");
+    app.io_finished();
+    assert!(!app.is_loading);
+  }
+
+  #[test]
+  fn a_failed_send_does_not_leave_the_hint_stuck_on() {
+    let (mut app, rx) = app();
+    drop(rx); // the network thread is gone
+    app.dispatch(IoEvent::GetUser);
+    assert!(!app.is_loading);
   }
 }
