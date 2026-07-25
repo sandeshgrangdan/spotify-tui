@@ -26,3 +26,8 @@ publish-jobs = ["npm"]
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = true
+
+# `spotify-tui` as a second command name for the same binary (symlinked by the
+# installers, so it costs no extra bytes in the archives).
+[dist.bin-aliases]
+spt = ["spotify-tui"]

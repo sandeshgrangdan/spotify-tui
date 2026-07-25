@@ -10,7 +10,7 @@ repository = "https://github.com/sandeshgrangdan/spotify-tui"
 keywords = ["spotify", "tui", "cli", "terminal", "music"]
 categories = ["command-line-utilities"]
 # Continues the numbering of upstream spotify-tui, which stopped at 0.25.0.
-version = "0.26.0"
+version = "0.26.1"
 authors = [
   "Sandesh Tamang",
   "Alexander Keliris <rigellute@gmail.com>",

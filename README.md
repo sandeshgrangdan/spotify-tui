@@ -8,7 +8,8 @@
 [![All Contributors](https://img.shields.io/badge/all_contributors-94-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-A Spotify client for the terminal written in Rust. The installed binary is `spt`.
+A Spotify client for the terminal written in Rust. Run it with `spt` or
+`spotify-tui`.
 
 > **This is a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui)**
 > by [Alexander Keliris (Rigellute)](https://twitter.com/intent/follow?screen_name=AlexKeliris)
@@ -63,10 +64,11 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
 
 ## Installation
 
-The installed binary is `spt`. Every [release][releases] carries prebuilt
-binaries for macOS and Linux on both x86_64 and aarch64, x86_64 Windows, and a
-static x86_64 musl build, so nothing below except the source build compiles
-anything. Windows on ARM runs the x86_64 build under emulation.
+The command is `spt`, with `spotify-tui` installed as an alias for it, so either
+name works. Every [release][releases] carries prebuilt binaries for macOS and
+Linux on both x86_64 and aarch64, x86_64 Windows, and a static x86_64 musl build,
+so nothing below except the source build compiles anything. Windows on ARM runs
+the x86_64 build under emulation.
 
 ### From binaries (Linux, macOS, Windows)
 
@@ -80,7 +82,7 @@ per-file `.sha256`, if you want to verify the download.
 ### Install prebuilt binaries via shell script (Linux, macOS)
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sandeshgrangdan/spotify-tui/releases/download/v0.26.0/spotify-tui-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sandeshgrangdan/spotify-tui/releases/download/v0.26.1/spotify-tui-installer.sh | sh
 ```
 
 The script picks the archive matching your platform and installs `spt` into
@@ -90,12 +92,13 @@ directory isn't on your `PATH`.
 ### Install prebuilt binaries via powershell script (Windows)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/sandeshgrangdan/spotify-tui/releases/download/v0.26.0/spotify-tui-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sandeshgrangdan/spotify-tui/releases/download/v0.26.1/spotify-tui-installer.ps1 | iex"
 ```
 
 ### npm
 
-The npm package wraps the same prebuilt binaries and exposes them as `spt`:
+The npm package wraps the same prebuilt binaries and exposes both `spt` and
+`spotify-tui`:
 
 ```bash
 npm install -g @sandeshgrangdan/spotify-tui

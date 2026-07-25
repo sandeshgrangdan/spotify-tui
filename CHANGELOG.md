@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-07-25
+
+### Added
+
+- `spotify-tui` now works as a command name alongside `spt`. The installers and
+  the npm package expose both; the archives still ship a single binary, so this
+  costs no extra download.
+
+### Fixed
+
+- Dropped the `aarch64-pc-windows-msvc` target, which broke the 0.26.0 release:
+  it is the one target dist cross-compiles (in the `messense/cargo-xwin`
+  container) and `ring`'s C sources will not build there. Since dist gates
+  publishing on every target succeeding, that one failure suppressed the whole
+  release. Windows on ARM runs the x86_64 build under emulation.
+
 ## [0.26.0] - 2026-07-25
 
 First release of this `spotify-tui` fork, continuing from upstream 0.25.0.
