@@ -1,6 +1,7 @@
-# spotui
+# spotify-tui
 
-[![Crates.io](https://img.shields.io/crates/v/spotui.svg)](https://crates.io/crates/spotui)
+[![Release](https://img.shields.io/github/v/release/sandeshgrangdan/spotify-tui?label=release)](https://github.com/sandeshgrangdan/spotify-tui/releases/latest)
+[![npm](https://img.shields.io/npm/v/@sandeshgrangdan/spotify-tui?label=npm)](https://www.npmjs.com/package/@sandeshgrangdan/spotify-tui)
 ![](https://img.shields.io/badge/license-MIT-blueviolet.svg)
 
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
@@ -11,9 +12,10 @@ A Spotify client for the terminal written in Rust. The installed binary is `spt`
 
 > **This is a fork of [spotify-tui](https://github.com/Rigellute/spotify-tui)**
 > by [Alexander Keliris (Rigellute)](https://twitter.com/intent/follow?screen_name=AlexKeliris)
-> and its 94 [contributors](#contributors), published separately on crates.io as
-> **`spotui`** because upstream stopped at 0.25.0 while several of the Spotify
-> endpoints it relied on were withdrawn. Version numbering continues from
+> and its 94 [contributors](#contributors), kept going because upstream stopped
+> at 0.25.0 while several of the Spotify endpoints it relied on were withdrawn.
+> It ships through this repo's GitHub Releases and npm rather than crates.io,
+> where the name still belongs to upstream. Version numbering continues from
 > upstream's 0.25.0, the licence is unchanged (MIT), and the config directory is
 > still `~/.config/spotify-tui` so an existing install keeps its credentials.
 
@@ -37,17 +39,12 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
 
 - [Spotify TUI](#spotify-tui)
   - [Installation](#installation)
-    - [Homebrew](#homebrew)
-    - [Snap](#snap)
-    - [AUR](#aur)
-    - [Nix](#nix)
-    - [Void Linux](#void-linux)
-    - [Fedora/CentOS](#fedora-centos)
+    - [From binaries (Linux, macOS, Windows)](#from-binaries-linux-macos-windows)
+    - [Install prebuilt binaries via shell script (Linux, macOS)](#install-prebuilt-binaries-via-shell-script-linux-macos)
+    - [Install prebuilt binaries via powershell script (Windows)](#install-prebuilt-binaries-via-powershell-script-windows)
+    - [npm](#npm)
     - [Cargo](#cargo)
-      - [Note on Linux](#note-on-linux)
-    - [Windows](#windows-10)
-      - [Scoop installer](#scoop-installer)
-    - [Manual](#manual)
+    - [Updating](#updating)
   - [Connecting to Spotify’s API](#connecting-to-spotifys-api)
     - [Re-authenticating](#re-authenticating)
   - [Usage](#usage)
@@ -66,130 +63,83 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
 
 ## Installation
 
-The binary executable is `spt`.
+The installed binary is `spt`. Every [release][releases] carries prebuilt
+binaries for macOS, Linux and Windows on both x86_64 and aarch64, plus a static
+x86_64 musl build, so none of the methods below except `cargo` compile anything.
+
+### From binaries (Linux, macOS, Windows)
+
+- Download the [latest release binary][latest] for your system — `.tar.xz` for
+  Linux and macOS, `.zip` for Windows — and unpack it
+- Move `spt` somewhere on your `PATH`
+
+Each release also publishes a `sha256.sum` covering every artifact, plus a
+per-file `.sha256`, if you want to verify the download.
+
+### Install prebuilt binaries via shell script (Linux, macOS)
 
 ```bash
-cargo install spotui
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sandeshgrangdan/spotify-tui/releases/download/v0.26.0/spotify-tui-installer.sh | sh
 ```
 
-If you already have upstream `spotify-tui` installed, that command will stop
-because the `spt` binary already exists — this fork installs the same binary
-name, so replace it with:
+The script picks the archive matching your platform and installs `spt` into
+`$CARGO_HOME/bin` (falling back to `$HOME/.cargo/bin`), telling you if that
+directory isn't on your `PATH`.
+
+### Install prebuilt binaries via powershell script (Windows)
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sandeshgrangdan/spotify-tui/releases/download/v0.26.0/spotify-tui-installer.ps1 | iex"
+```
+
+### npm
+
+The npm package wraps the same prebuilt binaries and exposes them as `spt`:
 
 ```bash
-cargo install --force spotui
+npm install -g @sandeshgrangdan/spotify-tui
 ```
 
-The package managers below distribute **upstream** `spotify-tui`, not this fork.
-They are kept here for reference and for the platform-specific build notes.
-
-### Homebrew
-
-For both macOS and Linux
-
-```bash
-brew install spotify-tui
-```
-
-To update, run
-
-```bash
-brew upgrade spotify-tui
-```
-
-### Snap
-
-For a system with Snap installed, run
-
-```bash
-snap install spt
-```
-
-The stable version will be installed for you automatically.
-
-If you want to install the nightly build, run
-
-```bash
-snap install spt --edge
-```
-
-### AUR
-
-For those on Arch Linux you can find the package on AUR [here](https://aur.archlinux.org/packages/spotify-tui/). If however you're using an AUR helper you can install directly from that, for example (in the case of [yay](https://github.com/Jguer/yay)), run
-
-```bash
-yay -S spotify-tui
-```
-
-### Nix
-
-Available as the package `spotify-tui`. To install run:
-
-```bash
-nix-env -iA nixpkgs.spotify-tui
-```
-
-Where `nixpkgs` is the channel name in your configuration. For a more up-to-date installation, use the unstable channel.
-It is also possible to add the package to `environment.systemPackages` (for NixOS), or `home.packages` when using [home-manager](https://github.com/rycee/home-manager).
-
-### Void Linux
-
-Available on the official repositories. To install, run
-
-```bash
-sudo xbps-install -Su spotify-tui
-```
-
-### Fedora/CentOS
-
-Available on the [Copr](https://copr.fedorainfracloud.org/coprs/atim/spotify-tui/) repositories. To install, run
-
-```bash
-sudo dnf copr enable atim/spotify-tui -y && sudo dnf install spotify-tui
-```
+Drop the `-g` to add it to a single project instead.
 
 ### Cargo
 
-This is how you install **this fork**.
-
-First, install [Rust](https://www.rust-lang.org/tools/install) (using the recommended `rustup` installation method) and then
-
-```bash
-cargo install spotui
-```
-
-This method will build the binary from source.
-
-To update, run the same command again.
-
-#### Note on Linux
-
-For compilation on Linux the development packages for `libssl` are required.
-For basic installation instructions, see [install OpenSSL](https://docs.rs/openssl/0.10.25/openssl/#automatic).
-In order to locate dependencies, the compilation also requires `pkg-config` to be installed.
-
-If you are using the Windows Subsystem for Linux, you'll need to [install additional dependencies](#windows-subsystem-for-linux).
-
-### Windows 10
-
-#### Scoop installer
-
-First, make sure scoop installer is on your windows box, for instruction please visit [scoop.sh](https://scoop.sh)
-
-Then open powershell and run following two commands:
+The only method that compiles. Install a [Rust
+toolchain](https://www.rust-lang.org/tools/install), then:
 
 ```bash
-scoop bucket add scoop-bucket https://github.com/Rigellute/scoop-bucket
-scoop install spotify-tui
+cargo install --git https://github.com/sandeshgrangdan/spotify-tui
 ```
 
-After that program is available as: `spt` or `spt.exe`
+Don't reach for `cargo install spotify-tui`: that crates.io name is upstream's
+and still serves 0.25.0. This fork isn't published to crates.io at all.
 
-### Manual
+If upstream is already installed the install stops, because the `spt` binary
+already exists — this fork uses the same binary name, so add `--force` to
+replace it.
 
-1. Download the latest [binary](https://github.com/Rigellute/spotify-tui/releases) for your OS.
-1. `cd` to the file you just downloaded and unzip
-1. `cd` to `spotify-tui` and run with `./spt`
+TLS needs nothing installed: this fork links rustls, so there is no OpenSSL or
+`libssl-dev` requirement. Clipboard support does link against X11/xcb, so a
+Linux source build wants their development packages:
+
+```bash
+sudo apt-get install -y pkg-config libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+### Updating
+
+The shell and PowerShell installers place an updater alongside the binary, so
+later upgrades are just:
+
+```bash
+spotify-tui-update
+```
+
+For the other two methods: `npm update -g @sandeshgrangdan/spotify-tui`, or
+`cargo install --force --git https://github.com/sandeshgrangdan/spotify-tui`.
+
+[releases]: https://github.com/sandeshgrangdan/spotify-tui/releases
+[latest]: https://github.com/sandeshgrangdan/spotify-tui/releases/latest
 
 ## Connecting to Spotify’s API
 
@@ -224,7 +174,7 @@ devices, and the sidebar's Devices pane marks the current one with `●`.
 
 And now you are ready to use the `spotify-tui` 🎉
 
-You can edit the config at anytime at `${HOME}/.config/spotify-tui/client.yml`. (for snap `${HOME}/snap/spt/current/.config/spotify-tui/client.yml`)
+You can edit the config at anytime at `${HOME}/.config/spotify-tui/client.yml`.
 
 ### Re-authenticating
 
@@ -310,7 +260,7 @@ spt search "An even cooler song" --tracks --format "%t from %b" --limit 30
 
 # Configuration
 
-A configuration file is located at `${HOME}/.config/spotify-tui/config.yml`, for snap `${HOME}/snap/spt/current/.config/spotify-tui/config.yml`
+A configuration file is located at `${HOME}/.config/spotify-tui/config.yml`
 (not to be confused with client.yml which handles spotify authentication)
 
 The following is a sample config.yml file:
