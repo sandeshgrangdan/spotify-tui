@@ -1,5 +1,8 @@
 [package]
-name = "spotui"
+name = "spotify-tui"
+# Not published to crates.io: the name belongs to upstream, and this fork is
+# distributed through GitHub Releases and npm instead.
+publish = false
 description = "A terminal user interface for Spotify, with an app-like home screen. Fork of spotify-tui, modernized for the post-2024 Web API."
 homepage = "https://github.com/sandeshgrangdan/spotify-tui"
 documentation = "https://github.com/sandeshgrangdan/spotify-tui"
@@ -25,6 +28,11 @@ exclude = [
   "how_to_release.md",
   "docs/",
 ]
+
+# `publish = false` above otherwise hides this package from dist, which would
+# leave a release tag with no artifacts.
+[package.metadata.dist]
+dist = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
