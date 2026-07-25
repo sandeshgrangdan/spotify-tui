@@ -7,12 +7,10 @@ use crate::network::IoEvent;
 use rspotify::prelude::Id;
 
 fn made_for_you_len(app: &App) -> usize {
-  app
-    .library
-    .made_for_you_playlists
-    .get_results(None)
-    .map(|p| p.items.len())
-    .unwrap_or(0)
+  // The "Made For You" home section is repurposed to show the user's top
+  // artists (see `made_for_you_pairs` in ui/mod.rs and the Enter handler
+  // below), so navigation is bounded by that list, not the library playlists.
+  app.top_artists.len()
 }
 
 fn recommended_len(app: &App) -> usize {
@@ -399,5 +397,39 @@ mod tests {
     handler(Key::Char('j'), &mut app);
     assert_eq!(app.home_selected_block, HomeBlock::MadeForYou);
     assert_eq!(app.home_made_for_you_index, 0);
+  }
+
+  #[allow(deprecated)]
+  fn make_artist(name: &str) -> rspotify::model::FullArtist {
+    use rspotify::model::{ArtistId, Followers, FullArtist};
+    FullArtist {
+      external_urls: Default::default(),
+      followers: Followers { total: 0 },
+      genres: vec![],
+      href: String::new(),
+      id: ArtistId::from_id("2CIMQHirSU0MQqyYHq0eOx".to_string()).unwrap(),
+      images: vec![],
+      name: name.to_string(),
+      popularity: 0,
+    }
+  }
+
+  #[test]
+  fn down_in_top_artists_section_moves_selection() {
+    let mut app = App::default();
+    app.top_artists = vec![make_artist("A"), make_artist("B"), make_artist("C")];
+    app.home_selected_block = HomeBlock::MadeForYou;
+    app.home_section_entered = true;
+
+    handler(Key::Char('j'), &mut app);
+    assert_eq!(app.home_made_for_you_index, 1);
+    handler(Key::Char('j'), &mut app);
+    assert_eq!(app.home_made_for_you_index, 2);
+    // Clamped at the last artist.
+    handler(Key::Char('j'), &mut app);
+    assert_eq!(app.home_made_for_you_index, 2);
+
+    handler(Key::Char('k'), &mut app);
+    assert_eq!(app.home_made_for_you_index, 1);
   }
 }
