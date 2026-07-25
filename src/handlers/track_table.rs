@@ -452,7 +452,7 @@ fn on_enter(app: &mut App) {
           app.dispatch(IoEvent::StartPlayback(
             context_uri,
             None,
-            Some(app.track_table.selected_index),
+            Some(app.track_table.selected_index + app.playlist_offset as usize),
           ));
         };
       }
@@ -570,9 +570,15 @@ fn jump_to_start(app: &mut App) {
 /// the current user owns that playlist.
 fn remove_selected_track_from_own_playlist(app: &mut App) {
   let user_id = app.user.as_ref().map(|u| u.id.id().to_string());
-  let playlist = app
-    .active_playlist_index
-    .and_then(|i| app.playlists.as_ref().and_then(|p| p.items.get(i).cloned()));
+  // Resolve the target playlist by id, not by index: the displayed table can
+  // be repopulated (jump-to-context, URI paste) or the sidebar reordered
+  // (after creating a playlist) without active_playlist_index staying valid.
+  let playlist = app.active_playlist_id.as_ref().and_then(|pid| {
+    app
+      .playlists
+      .as_ref()
+      .and_then(|p| p.items.iter().find(|pl| pl.id.id() == pid.as_str()).cloned())
+  });
   if let (Some(user_id), Some(playlist)) = (user_id, playlist) {
     if playlist.owner.id.id() == user_id {
       if let Some(uri) = app
@@ -694,6 +700,7 @@ mod remove_from_playlist_tests {
       total: 1,
     });
     app.active_playlist_index = Some(0);
+    app.active_playlist_id = Some("37i9dQZF1DXcBWIGoYBM5M".to_string());
     app.track_table.tracks = vec![make_track("4iV5W9uYEdYUVa79Axb7Rh")];
     app.track_table.selected_index = 0;
     app.track_table.context = Some(TrackTableContext::MyPlaylists);
@@ -711,6 +718,17 @@ mod remove_from_playlist_tests {
   #[test]
   fn does_not_remove_track_from_foreign_playlist() {
     let mut app = app_with_playlist("someone_else", "me");
+    handler(Key::Char('D'), &mut app);
+    assert!(!app.is_loading);
+  }
+
+  #[test]
+  fn does_not_remove_when_active_playlist_id_is_cleared() {
+    // Simulates the jump-to-context / URI-paste state: the table shows some
+    // playlist's tracks but active_playlist_id was cleared, so 'D' must not
+    // delete from a stale playlist.
+    let mut app = app_with_playlist("me", "me");
+    app.active_playlist_id = None;
     handler(Key::Char('D'), &mut app);
     assert!(!app.is_loading);
   }

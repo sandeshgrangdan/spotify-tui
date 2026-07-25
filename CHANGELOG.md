@@ -25,7 +25,11 @@
 - Playing a track inside an album/playlist/liked-songs context now starts at that track instead of track 1
 - CLI subcommands (`spt playback/play/list/search`) run again — dispatch was severed during the clap 4 migration — and per-flag format defaults are back
 - Audio analysis view degrades gracefully instead of showing a misleading error screen
-- Several debug-build panics (help menu paging, narrow terminals, empty lists)
+- Playing a track in a search-opened playlist after paging now starts the correct track (page offset was ignored)
+- Remove-from-playlist (`D`) resolves the target playlist by id, so it can no longer delete from the wrong playlist after a jump-to-context or a sidebar reorder
+- Add-to-playlist picker only offers playlists you can modify (owned or collaborative), avoiding 403s on followed playlists
+- New Releases and Top Tracks now show correct saved/liked icons
+- Several debug-build panics (help menu paging, narrow terminals, empty lists, the playlist picker on short terminals, and `M`/middle-jump on an empty pane)
 
 ## [0.25.0] - 2021-08-24
 

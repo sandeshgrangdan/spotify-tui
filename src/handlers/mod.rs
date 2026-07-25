@@ -241,6 +241,9 @@ fn handle_jump_to_context(app: &mut App) {
         rspotify::model::Type::Album => handle_jump_to_album(app),
         rspotify::model::Type::Artist => handle_jump_to_artist_album(app),
         rspotify::model::Type::Playlist => {
+          // Jumped-to playlist is not the sidebar edit target; clear the
+          // remove-from-playlist target so 'D' can't delete from a stale one.
+          app.active_playlist_id = None;
           app.dispatch(IoEvent::GetPlaylistTracks(play_context.uri, 0))
         }
         _ => {}

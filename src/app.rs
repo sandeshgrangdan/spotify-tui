@@ -368,6 +368,7 @@ pub struct App {
   pub selected_device_index: Option<usize>,
   pub selected_playlist_index: Option<usize>,
   pub active_playlist_index: Option<usize>,
+  pub active_playlist_id: Option<String>,
   pub size: Rect,
   pub small_search_limit: u32,
   pub song_progress_ms: u128,
@@ -489,6 +490,7 @@ impl Default for App {
       selected_device_index: None,
       selected_playlist_index: None,
       active_playlist_index: None,
+      active_playlist_id: None,
       track_table: Default::default(),
       episode_table_context: EpisodeTableContext::Full,
       selected_show_simplified: None,
@@ -1404,8 +1406,26 @@ impl App {
 
   /// Open the centered playlist-picker modal to add `uri` (a track or
   /// episode) to one of the user's playlists.
+  /// Playlists the current user can add items to: ones they own, or
+  /// collaborative ones. Adding to a followed (non-owned) playlist would 403,
+  /// so the picker only offers these. Order matches `self.playlists` so the
+  /// UI and the picker handler agree on indexing.
+  pub fn modifiable_playlists(&self) -> Vec<&SimplifiedPlaylist> {
+    let user_id = self.user.as_ref().map(|u| u.id.id().to_string());
+    match (&self.playlists, user_id) {
+      (Some(page), Some(uid)) => page
+        .items
+        .iter()
+        .filter(|p| p.collaborative || p.owner.id.id() == uid)
+        .collect(),
+      // User profile not loaded yet — don't hide everything.
+      (Some(page), None) => page.items.iter().collect(),
+      _ => Vec::new(),
+    }
+  }
+
   pub fn open_playlist_picker(&mut self, uri: String) {
-    if self.playlists.is_some() {
+    if !self.modifiable_playlists().is_empty() {
       self.playlist_picker_uri = Some(uri);
       self.playlist_picker_index = 0;
       self.push_navigation_stack(RouteId::Dialog, ActiveBlock::PlaylistPicker);

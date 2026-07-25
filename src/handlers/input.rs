@@ -174,6 +174,7 @@ fn attempt_process_uri(app: &mut App, input: &str, base: &str, sep: &str) -> boo
 
   let (playlist_id, matched) = spotify_resource_id(base, input, sep, "playlist");
   if matched {
+    app.active_playlist_id = None;
     app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, 0));
     return true;
   }

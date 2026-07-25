@@ -4,11 +4,7 @@ use crate::network::IoEvent;
 use rspotify::prelude::Id;
 
 fn playlists_len(app: &App) -> usize {
-  app
-    .playlists
-    .as_ref()
-    .map(|p| p.items.len())
-    .unwrap_or(0)
+  app.modifiable_playlists().len()
 }
 
 fn close_picker(app: &mut App) {
@@ -33,9 +29,8 @@ pub fn handler(key: Key, app: &mut App) {
     }
     Key::Enter => {
       let playlist_id = app
-        .playlists
-        .as_ref()
-        .and_then(|p| p.items.get(app.playlist_picker_index))
+        .modifiable_playlists()
+        .get(app.playlist_picker_index)
         .map(|p| p.id.id().to_string());
       if let (Some(pid), Some(uri)) = (playlist_id, app.playlist_picker_uri.clone()) {
         app.dispatch(IoEvent::AddItemToPlaylist(pid, uri));
@@ -71,6 +66,15 @@ mod tests {
     let mut app = App::default();
     handler(Key::Char('j'), &mut app);
     handler(Key::Char('k'), &mut app);
+    assert_eq!(app.playlist_picker_index, 0);
+  }
+
+  #[test]
+  fn navigation_with_no_playlists_wraps_safely() {
+    let mut app = App::default();
+    for _ in 0..3 {
+      handler(Key::Char('j'), &mut app);
+    }
     assert_eq!(app.playlist_picker_index, 0);
   }
 

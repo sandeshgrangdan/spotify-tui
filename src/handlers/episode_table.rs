@@ -54,6 +54,13 @@ pub fn handler(key: Key, app: &mut App) {
     Key::Char('D') => handle_unfollow_event(app),
     Key::Ctrl('e') => jump_to_end(app),
     Key::Ctrl('a') => jump_to_start(app),
+    _ if key == app.user_config.keys.add_to_playlist => {
+      if let Some(episodes) = app.library.show_episodes.get_results(None) {
+        if let Some(episode) = episodes.items.get(app.episode_list_index) {
+          app.open_playlist_picker(episode.id.uri());
+        }
+      }
+    }
     _ => {}
   }
 }

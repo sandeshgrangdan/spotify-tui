@@ -336,6 +336,9 @@ impl Network {
 
   #[allow(deprecated)]
   async fn current_user_saved_tracks_contains(&mut self, ids: Vec<String>) {
+    if ids.is_empty() {
+      return;
+    }
     let track_ids: Vec<TrackId<'static>> = ids
       .iter()
       .filter_map(|id| TrackId::from_id_or_uri(id).ok().map(|t| t.into_static()))
@@ -462,6 +465,9 @@ impl Network {
 
   #[allow(deprecated)]
   async fn current_user_saved_shows_contains(&mut self, show_ids: Vec<String>) {
+    if show_ids.is_empty() {
+      return;
+    }
     let ids: Vec<ShowId<'static>> = show_ids
       .iter()
       .filter_map(|id| ShowId::from_id_or_uri(id).ok().map(|s| s.into_static()))
@@ -1110,6 +1116,9 @@ impl Network {
 
   #[allow(deprecated)]
   async fn user_artist_check_follow(&mut self, artist_ids: Vec<String>) {
+    if artist_ids.is_empty() {
+      return;
+    }
     let ids: Vec<ArtistId<'static>> = artist_ids
       .iter()
       .filter_map(|id| ArtistId::from_id_or_uri(id).ok().map(|a| a.into_static()))
@@ -1160,8 +1169,16 @@ impl Network {
       .await
     {
       Ok(page) => {
-        let mut app = self.app.lock().await;
-        app.library.new_releases.add_pages(page);
+        let album_ids: Vec<String> = page
+          .items
+          .iter()
+          .filter_map(|a| a.id.as_ref().map(|id| id.id().to_string()))
+          .collect();
+        {
+          let mut app = self.app.lock().await;
+          app.library.new_releases.add_pages(page);
+        }
+        self.current_user_saved_albums_contains(album_ids).await;
       }
       Err(e) => {
         self.handle_error(anyhow!(e)).await;
@@ -1171,6 +1188,9 @@ impl Network {
 
   #[allow(deprecated)]
   async fn current_user_saved_albums_contains(&mut self, album_ids: Vec<String>) {
+    if album_ids.is_empty() {
+      return;
+    }
     let ids: Vec<AlbumId<'static>> = album_ids
       .iter()
       .filter_map(|id| AlbumId::from_id_or_uri(id).ok().map(|a| a.into_static()))
@@ -1404,10 +1424,18 @@ impl Network {
       .await
     {
       Ok(page) => {
-        let mut app = self.app.lock().await;
-        app.track_table.tracks = page.items;
-        app.track_table.selected_index = 0;
-        app.track_table.context = Some(TrackTableContext::TopTracks);
+        let track_ids: Vec<String> = page
+          .items
+          .iter()
+          .filter_map(|t| t.id.as_ref().map(|id| id.id().to_string()))
+          .collect();
+        {
+          let mut app = self.app.lock().await;
+          app.track_table.tracks = page.items;
+          app.track_table.selected_index = 0;
+          app.track_table.context = Some(TrackTableContext::TopTracks);
+        }
+        self.current_user_saved_tracks_contains(track_ids).await;
       }
       Err(e) => {
         self.handle_error(anyhow!("Top tracks fetch failed: {}", e)).await;

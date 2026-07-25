@@ -2357,15 +2357,17 @@ fn draw_playlist_picker(f: &mut Frame, app: &App)
   let height = std::cmp::min(bounds.height.saturating_sub(2), 16);
   let left = bounds.width.saturating_sub(width) / 2;
   let top = bounds.height / 5;
-  let rect = Rect::new(left, top, width, height);
+  // Clamp to the frame — an unclamped rect panics ratatui's Clear on short
+  // terminals.
+  let rect = Rect::new(left, top, width, height).intersection(bounds);
 
   f.render_widget(Clear, rect);
 
   let names: Vec<String> = app
-    .playlists
-    .as_ref()
-    .map(|p| p.items.iter().map(|pl| pl.name.clone()).collect())
-    .unwrap_or_default();
+    .modifiable_playlists()
+    .iter()
+    .map(|pl| pl.name.clone())
+    .collect();
 
   let items: Vec<ListItem> = names
     .iter()
@@ -2408,7 +2410,7 @@ fn draw_dialog(f: &mut Frame, app: &App)
       let left = (bounds.width - width) / 2;
       let top = bounds.height / 4;
 
-      let rect = Rect::new(left, top, width, height);
+      let rect = Rect::new(left, top, width, height).intersection(bounds);
 
       f.render_widget(Clear, rect);
 

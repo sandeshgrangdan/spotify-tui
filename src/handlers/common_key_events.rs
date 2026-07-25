@@ -67,6 +67,9 @@ pub fn on_high_press_handler() -> usize {
 }
 
 pub fn on_middle_press_handler<T>(selection_data: &[T]) -> usize {
+  if selection_data.is_empty() {
+    return 0;
+  }
   let mut index = selection_data.len() / 2;
   if selection_data.len() % 2 == 0 {
     index -= 1;
@@ -166,6 +169,12 @@ mod tests {
     let index = data.len() - 1;
     let next_index = on_down_press_handler(&data, Some(index));
     assert_eq!(next_index, 0);
+  }
+
+  #[test]
+  fn test_on_middle_press_handler_empty_list() {
+    let data: Vec<&str> = vec![];
+    assert_eq!(on_middle_press_handler(&data), 0);
   }
 
   #[test]
