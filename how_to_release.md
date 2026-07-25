@@ -19,7 +19,7 @@ Pushing a version tag is what triggers a release.
 1. Push the tag: `git push --tags`.
 1. Watch the run on the [Actions page](https://github.com/sandeshgrangdan/spotify-tui/actions).
 
-On success the workflow creates the GitHub Release and attaches, for all seven
+On success the workflow creates the GitHub Release and attaches, for all six
 targets, the binary archives, the `spotify-tui-installer.sh` /
 `spotify-tui-installer.ps1` installers, the npm package tarball, and a
 `sha256.sum`.

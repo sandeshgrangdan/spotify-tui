@@ -64,8 +64,9 @@ The terminal in the demo above is using the [Rigel theme](https://rigel.netlify.
 ## Installation
 
 The installed binary is `spt`. Every [release][releases] carries prebuilt
-binaries for macOS, Linux and Windows on both x86_64 and aarch64, plus a static
-x86_64 musl build, so none of the methods below except `cargo` compile anything.
+binaries for macOS and Linux on both x86_64 and aarch64, x86_64 Windows, and a
+static x86_64 musl build, so nothing below except the source build compiles
+anything. Windows on ARM runs the x86_64 build under emulation.
 
 ### From binaries (Linux, macOS, Windows)
 

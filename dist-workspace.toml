@@ -9,8 +9,15 @@ cargo-dist-version = "0.32.0"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell", "npm"]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+# Target platforms to build apps for (Rust target-triple syntax).
+# aarch64-pc-windows-msvc is deliberately absent: dist has no native ARM64
+# Windows runner by default, so it cross-compiles in the messense/cargo-xwin
+# container, and ring's C sources (pulled in via rspotify -> reqwest -> rustls)
+# fail to compile there. Windows on ARM runs the x86_64 build under emulation.
+# To build it natively instead, add:
+#   [dist.github-custom-runners]
+#   aarch64-pc-windows-msvc = "windows-11-arm"
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # A namespace to use when publishing this package to the npm registry
 npm-scope = "@sandeshgrangdan"
 # Publish the npm package to the registry (needs an NPM_TOKEN repo secret)
