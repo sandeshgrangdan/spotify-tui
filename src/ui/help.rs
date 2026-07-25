@@ -163,8 +163,13 @@ pub fn get_help_docs(key_bindings: &KeyBindings) -> Vec<Vec<String>> {
       String::from("General"),
     ],
     vec![
-      String::from("Go back or exit when nowhere left to back to"),
+      String::from("Go back"),
       key_bindings.back.to_string(),
+      String::from("General"),
+    ],
+    vec![
+      String::from("Quit the application"),
+      String::from("Ctrl+c"),
       String::from("General"),
     ],
     vec![

@@ -4,6 +4,10 @@
 
 - Fix confirmation dialog handling on playlist delete [#910](https://github.com/Rigellute/spotify-tui/pull/910)
 
+### Changed
+
+- The back key (`q`) no longer quits the app when there is nowhere left to go back to — it is now purely a navigation key. Only `Ctrl+c` terminates the TUI.
+
 ### Added
 
 - Playlist management: add selected track/episode to a playlist via a picker modal (`t`), create playlists (`N` in the playlist pane), remove tracks from playlists you own (`D`)

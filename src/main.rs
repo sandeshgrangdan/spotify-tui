@@ -359,15 +359,14 @@ async fn start_ui(user_config: UserConfig, app: &Arc<Mutex<App>>) -> Result<()> 
           handlers::input_handler(key, &mut app);
         } else if key == app.user_config.keys.back {
           if app.get_current_route().active_block != ActiveBlock::Input {
-            // Go back through navigation stack when not in search input mode and exit the app if there are no more places to back to
-
-            let pop_result = match app.pop_navigation_stack() {
-              Some(ref x) if x.id == RouteId::Search => app.pop_navigation_stack(),
-              Some(x) => Some(x),
-              None => None,
-            };
-            if pop_result.is_none() {
-              break; // Exit application
+            // Go back through the navigation stack when not in search input
+            // mode. Reaching the root route is a no-op — only Ctrl+C
+            // terminates the app.
+            if let Some(ref x) = app.pop_navigation_stack() {
+              if x.id == RouteId::Search {
+                // Skip the intermediate Search route on the way back.
+                app.pop_navigation_stack();
+              }
             }
           }
         } else {
