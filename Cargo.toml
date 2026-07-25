@@ -57,3 +57,8 @@ serde_json = "1.0"
 bench = false
 path = "src/main.rs"
 name = "spt"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
